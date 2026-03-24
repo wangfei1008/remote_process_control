@@ -56,6 +56,7 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
     const std::string clientId = m_id;
     // 通道一打开即尝试授予控制权并下发 controlGranted，避免仅依赖前端 controlRequest 时出现竞态，
     // 导致 m_controller_id 仍为空、所有鼠标键盘消息被丢弃。
+
     dc->onOpen([clientId, wdc = make_weak_ptr(dc), this]() {
         if (auto ch = wdc.lock()) {
             ch->send("Ping");

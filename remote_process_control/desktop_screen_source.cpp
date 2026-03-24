@@ -75,7 +75,7 @@ uint64_t DesktopScreenSource::get_sample_time_us()
 
 uint64_t DesktopScreenSource::get_sample_duration_us()
 {
-    return 1000000 / fps; // ???????????¦Ë???
+    return 1000000 / fps; // ???????????ï¿½ï¿½???
 }
 
 std::vector<std::byte> DesktopScreenSource::initial_nalus()

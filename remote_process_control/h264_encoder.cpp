@@ -121,7 +121,7 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
     yuv_frame->width = width;
     yuv_frame->height = height;
     yuv_frame->pts = frame_seq++;
-    // IDR£ºGOP ±ß½ç¡¢Ê×Ö¡¡¢»ò·Ö±æÂÊ±ä»¯ºóÊ×Ö¡£¨force_keyframe£©£¬±ÜÃâ WebRTC ¶Ë SPS ±ä¸üºó P Ö¡½âÂëÂÌÆÁ
+    // IDRï¿½ï¿½GOP ï¿½ß½ç¡¢ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½Ö±ï¿½ï¿½Ê±ä»¯ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½force_keyframeï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ WebRTC ï¿½ï¿½ SPS ï¿½ï¿½ï¿½ï¿½ï¿½ P Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     {
         const int gop = std::max<int>(1, ctx->gop_size);
         if (force_keyframe || yuv_frame->pts == 0 || (yuv_frame->pts % gop) == 0) {

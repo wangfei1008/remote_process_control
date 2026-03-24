@@ -299,9 +299,6 @@ void ProcessManager::load_next_sample()
         return;
 
     if (m_had_successful_video && !m_exit_notified) {
-        // 必须监视「当前采集所属 PID」（m_capturePid）。Win11 等下记事本常为 stub 启动后退出，
-        // 真实窗口在另一进程（rebound 后 m_capturePid != m_launchPid）；若仍查 m_pi.hProcess
-        // 会在 stub 退出后误报「远端已结束」并停流。
         if (m_capturePid != 0) {
             HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_capturePid);
             if (hProc) {
@@ -315,60 +312,44 @@ void ProcessManager::load_next_sample()
             }
         }
         if (m_mainWindow && !IsWindow(m_mainWindow)) {
-            // 句柄失效常见于：启动器窗口关闭后由新 HWND 接管、UWP/WinUI 重建主窗等。
-            // 若此处直接 notify，前端会立刻关窗；改为清空后走下方重新枚举窗口。
             m_mainWindow = nullptr;
         }
     }
 
     static auto lastDiag = std::chrono::steady_clock::now();
-
     if (!m_mainWindow) {
         m_mainWindow = find_main_window(m_capturePid);
         if (!m_mainWindow) {
-            auto wins = find_all_windows(m_capturePid);
-            // Prefer a visible window; otherwise keep the first one as candidate.
-            for (auto h : wins) {
+            std::vector<HWND> wins = find_all_windows(m_capturePid);
+            for (HWND h : wins) {
                 if (IsWindowVisible(h)) {
                     m_mainWindow = h;
                     break;
                 }
             }
-            if (!m_mainWindow && !wins.empty()) m_mainWindow = wins.front();
+            if (!m_mainWindow && !wins.empty())
+                m_mainWindow = wins.front();
         }
-        // If the original PID has no windows (common for launcher/stub processes),
-        // try to find a top-level visible window by executable base name.
+
         if (!m_mainWindow && !m_targetExeBaseName.empty()) {
             HWND h = find_window_by_exe_basename(m_targetExeBaseName);
             if (h) {
                 DWORD realPid = 0;
                 GetWindowThreadProcessId(h, &realPid);
                 if (realPid) {
-                    std::cout << "[proc] rebound window by exe, oldPid=" << m_pi.dwProcessId
-                              << " newPid=" << realPid << " hwnd=" << h << std::endl;
                     m_capturePid = realPid;
                     m_mainWindow = h;
                 }
             }
         }
+
         if (!m_mainWindow) {
-            // Keep advancing timestamps even if the window isn't ready yet,
-            // otherwise the stream scheduler may stall on video forever.
-            auto now = std::chrono::steady_clock::now();
+            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
             if (now - lastDiag > std::chrono::seconds(1)) {
                 lastDiag = now;
-                auto wins = find_all_windows(m_capturePid);
+                std::vector<HWND> wins = find_all_windows(m_capturePid);
                 std::cout << "[proc] no window yet, pid=" << m_capturePid
                           << " windows=" << wins.size() << std::endl;
-                int shown = 0;
-                for (auto h : wins) {
-                    if (shown++ >= 5) break;
-                    char title[256] = {0};
-                    GetWindowTextA(h, title, sizeof(title) - 1);
-                    std::cout << "  hwnd=" << h
-                              << " visible=" << (IsWindowVisible(h) ? 1 : 0)
-                              << " title=" << title << std::endl;
-                }
             }
             sample.clear();
             sampleTime_us += get_sample_duration_us();
@@ -376,47 +357,44 @@ void ProcessManager::load_next_sample()
         }
     }
 
-    // ???????????????std::vector<uint8_t>
-    //std::vector<uint8_t> frame = m_windowCapture.capture(m_mainWindow, m_width, m_height);
     int width = 0, height = 0;
     int capMinLeft = 0, capMinTop = 0;
-    const auto t_cap_begin = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point t_cap_begin = std::chrono::steady_clock::now();
+
     std::vector<uint8_t> frame = capture_all_windows_image(
         m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
-    const auto t_after_cap = std::chrono::steady_clock::now();
+
+    const std::chrono::steady_clock::time_point t_after_cap = std::chrono::steady_clock::now();
     if (frame.empty() || width <= 0 || height <= 0) {
         sample.clear();
         sampleTime_us += get_sample_duration_us();
         return;
     }
+
     const bool layout_changed = (width != m_width || height != m_height);
     if (layout_changed) {
-        // ?????????
         if (m_av_codec_ctx) {
-            destroy_h264_encoder(m_av_codec_ctx); // ?????????????????
+            destroy_h264_encoder(m_av_codec_ctx);
             m_av_codec_ctx = nullptr;
         }
         m_encode_frame_seq = 0;
-        // ?????????
         m_width = width;
         m_height = height;
-        // ????????????
         m_av_codec_ctx = create_h264_encoder(m_width, m_height, m_fps);
         m_extradata_spspps = parse_avcc_spspps(m_av_codec_ctx);
     }
 
     InputController::instance()->set_capture_screen_rect(capMinLeft, capMinTop, m_width, m_height);
 
-    // ?????H264
     std::vector<uint8_t> h264_data;
-    const auto t_enc_begin = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point t_enc_begin = std::chrono::steady_clock::now();
     bool ok = encode_rgb(m_av_codec_ctx, frame.data(), m_width, m_height, m_encode_frame_seq, h264_data,
                          layout_changed);
-    const auto t_enc_end = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point t_enc_end = std::chrono::steady_clock::now();
+
     if (ok && !h264_data.empty()) {
-        std::vector<std::byte> h264_bytes(h264_data.size());
-        std::memcpy(h264_bytes.data(), h264_data.data(), h264_data.size());
-        sample = rtc::binary(h264_bytes.begin(), h264_bytes.end());
+        // 直接把编码后的 H264 access unit 作为 payload 发送给客户端。
+        sample = rtc::binary(h264_data.begin(), h264_data.end());
         sampleTime_us += get_sample_duration_us();
 
         m_last_capture_ms = static_cast<uint32_t>(
@@ -425,60 +403,8 @@ void ProcessManager::load_next_sample()
             std::chrono::duration_cast<std::chrono::milliseconds>(t_enc_end - t_enc_begin).count());
         m_last_frame_unix_ms = rpc_unix_epoch_ms();
         m_had_successful_video = true;
-
-        bool has7 = false, has8 = false, has5 = false;
-        size_t i = 0;
-        while (i + 4 <= sample.size()) {
-            uint32_t length;
-            std::memcpy(&length, sample.data() + i, sizeof(uint32_t));
-            length = ntohl(length);
-            auto naluStartIndex = i + 4;
-            auto naluEndIndex = naluStartIndex + length;
-            if (naluEndIndex > sample.size()) break; // ??????
-            auto header = reinterpret_cast<rtc::NalUnitHeader*>(sample.data() + naluStartIndex);
-            auto type = header->unitType();
-            switch (type) {
-            case 7:
-                has7 = true;
-                previousUnitType7 = { sample.begin() + i, sample.begin() + naluEndIndex };
-                break;
-            case 8:
-                has8 = true;
-                previousUnitType8 = { sample.begin() + i, sample.begin() + naluEndIndex };
-                break;
-            case 5:
-                has5 = true;
-                previousUnitType5 = { sample.begin() + i, sample.begin() + naluEndIndex };
-                break;
-            }
-            i = naluEndIndex;
-        }
-
-        // Browser decoders often need SPS/PPS before the first IDR.
-        // If we got an IDR but this access unit doesn't contain SPS/PPS, prepend cached SPS/PPS.
-        if (has5 && (!has7 || !has8)) {
-            std::optional<std::vector<std::byte>> prefix = std::nullopt;
-            if (previousUnitType7.has_value() && previousUnitType8.has_value()) {
-                std::vector<std::byte> v;
-                v.reserve(previousUnitType7->size() + previousUnitType8->size());
-                v.insert(v.end(), previousUnitType7->begin(), previousUnitType7->end());
-                v.insert(v.end(), previousUnitType8->begin(), previousUnitType8->end());
-                prefix = std::move(v);
-            } else if (m_extradata_spspps.has_value()) {
-                prefix = m_extradata_spspps;
-            }
-
-            if (prefix.has_value()) {
-                rtc::binary merged;
-                merged.reserve(prefix->size() + sample.size());
-                merged.insert(merged.end(), prefix->begin(), prefix->end());
-                merged.insert(merged.end(), sample.begin(), sample.end());
-                sample = std::move(merged);
-            }
-        }
     } else {
-        // 编码失败或本帧无码流时也必须推进时间轴并清空 sample，否则会反复 sendFrame
-        // 上一帧数据 + 相同 sampleTime，浏览器侧表现为画面冻结、只显示局部/首帧。
+        // 编码失败或本帧无码流也必须推进时间轴并清空 sample，否则会反复 sendFrame。
         sample.clear();
         sampleTime_us += get_sample_duration_us();
     }

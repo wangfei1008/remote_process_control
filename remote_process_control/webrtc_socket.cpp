@@ -240,7 +240,8 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                 }
             }
 
-            if (videoFrameIndex % 15 == 0) {
+            // 测试精确对齐：每帧都发 frameMark(seq, srvMs/capMs/encMs)
+            if (true) {
                 uint64_t srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count());
                 uint32_t cap_ms = 0;
