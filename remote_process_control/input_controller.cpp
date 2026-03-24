@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <atomic>
+#include <chrono>
 
 #ifndef ASFW_ANY
 #define ASFW_ANY 0x0000FFFF
@@ -13,6 +15,7 @@
 #endif
 
 InputController* InputController::m_instance = nullptr;
+static std::atomic<uint64_t> g_last_input_activity_ms{0};
 
 void InputController::ensure_process_dpi_awareness()
 {
@@ -27,6 +30,19 @@ void InputController::ensure_process_dpi_awareness()
 		GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
 	if (fn)
 		(void)fn(PER_MONITOR_AWARE_V2);
+}
+
+void InputController::note_input_activity()
+{
+    const uint64_t now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    g_last_input_activity_ms.store(now, std::memory_order_relaxed);
+}
+
+uint64_t InputController::last_input_activity_ms()
+{
+    return g_last_input_activity_ms.load(std::memory_order_relaxed);
 }
 
 InputController* InputController::instance()
@@ -88,7 +104,7 @@ void InputController::bring_mouse_target_foreground()
 
 void InputController::move_mouse_to_screen_pixel(int screen_x, int screen_y)
 {
-	// ?? set_capture_screen_rect / GetWindowRect ?????????ensure_process_dpi_awareness ????????????
+	// Coordinate mapping relies on capture/window rects and process DPI awareness being aligned.
 	if (::SetCursorPos(screen_x, screen_y))
 		return;
 
@@ -116,11 +132,13 @@ void InputController::move_mouse_to_screen_pixel(int screen_x, int screen_y)
 
 void InputController::simulate_mouse_move(int x, int y)
 {
+	note_input_activity();
 	move_mouse_to_screen_pixel(x, y);
 }
 
 void InputController::simulate_mouse_move(int x, int y, int abs_x, int abs_y, int video_width, int video_height)
 {
+	note_input_activity();
 	// Prefer merged capture rect; else main window GetWindowRect
 	if (video_width > 0 && video_height > 0 && m_cap_w > 0 && m_cap_h > 0) {
 		// Pixel-center normalization to match frontend mapping
@@ -172,6 +190,7 @@ void InputController::simulate_mouse_move(int x, int y, int abs_x, int abs_y, in
 
 void InputController::simulate_mouse_down(int button, int x, int y)
 {
+	note_input_activity();
 	bring_mouse_target_foreground();
 
 	INPUT input{};
@@ -191,6 +210,7 @@ void InputController::simulate_mouse_down(int button, int x, int y)
 
 void InputController::simulate_mouse_up(int button, int x, int y)
 {
+	note_input_activity();
 	bring_mouse_target_foreground();
 
 	INPUT input{};
@@ -210,6 +230,7 @@ void InputController::simulate_mouse_up(int button, int x, int y)
 
 void InputController::simulate_mouse_double_click(int button, int x, int y)
 {
+	note_input_activity();
 	simulate_mouse_down(button, x, y);
 	simulate_mouse_up(button, x, y);
 	Sleep(50); // Short delay between clicks
@@ -219,9 +240,10 @@ void InputController::simulate_mouse_double_click(int button, int x, int y)
 
 void InputController::simulate_mouse_wheel(int delta_x, int delta_y, int x, int y)
 {
+	note_input_activity();
 	bring_mouse_target_foreground();
 
-	// ????? delta ????????Windows ????? WHEEL_DELTA(120) ????????
+	// Scale frontend wheel delta to Windows WHEEL_DELTA units (120).
 	const int WHEEL = static_cast<int>(WHEEL_DELTA);
 	auto scaleWheel = [WHEEL](int d) -> int {
 		if (d == 0) return 0;
@@ -279,18 +301,20 @@ void InputController::simulate_key_press(int key_code)
 
 void InputController::simulate_key_down(int key, int code, int key_code, int shift_key, int ctrl_key, int alt_key, int meta_key)
 {
+	note_input_activity();
 	if (key_code == 0) return;
 	bring_mouse_target_foreground();
     if (shift_key) simulate_key_press(VK_SHIFT); 
     if (ctrl_key)  simulate_key_press(VK_CONTROL); 
     if (alt_key)   simulate_key_press(VK_MENU);
-	// ???? Win ?????????????? LWIN
+	// Map frontend Meta to the Windows key (LWIN) when needed.
 	if (meta_key && key_code != VK_LWIN && key_code != VK_RWIN) simulate_key_press(VK_LWIN);
     simulate_key_press(key_code);
 }
 
 void InputController::simulate_key_up(int key, int code, int key_code, int shift_key, int ctrl_key, int alt_key, int meta_key)
 {
+	note_input_activity();
 	if (key_code == 0) return;
 	bring_mouse_target_foreground();
     simulate_key_release(key_code);

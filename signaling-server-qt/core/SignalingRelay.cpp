@@ -6,7 +6,7 @@
 
 SignalingRelay::SignalingRelay(ClientRegistry *registry) : registry_(registry) {}
 
-bool SignalingRelay::relayTextMessage(QWebSocket *from, const QString &messageText) const
+bool SignalingRelay::relay_text_message(QWebSocket *from, const QString &messageText) const
 {
 	if (!registry_ || !from)
 		return false;

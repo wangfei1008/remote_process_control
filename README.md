@@ -27,6 +27,101 @@
 - **控制上行**：前端把鼠标/键盘事件通过 WebRTC DataChannel 发给 Windows 客户端，客户端使用 `SendInput` 注入为真实输入。
 - **并发**：支持多前端同时观看同一流；**默认仅允许 1 个前端获得控制权**（其他为只读观看，输入被忽略）。
 
+## 远端核心架构（重点）
+
+远端核心位于 `remote_process_control/`，按职责可分为：
+
+- **会话编排层**：`webrtc_socket.*`
+  - 处理 `request/answer/stop` 信令消息；
+  - 管理客户端连接池、共享流生命周期、控制权仲裁。
+- **单连接层**：`client_peer_connection.*`
+  - 负责每个客户端的 `PeerConnection`、音视频 Track、DataChannel；
+  - 处理输入事件 JSON，并调用输入注入。
+- **媒体调度层**：`stream.*`
+  - 维护音视频 sample 时间轴；
+  - 按统一时钟推送到所有 Ready 客户端。
+- **采集与编码层**：`process_manager.*` + `h264_encoder.*` + `dxgi_capture.*` + `window_capture.*`
+  - 启动目标进程、定位窗口、采集帧、编码 H264；
+  - 优先硬件路径（DXGI/硬件编码），不可用时自动回退。
+- **输入注入层**：`input_controller.*`
+  - 将前端坐标映射为屏幕坐标，调用 `SendInput` 注入鼠标键盘；
+  - 记录输入活动，用于动态帧率策略（交互升帧、静止降帧）。
+
+### 远端核心数据流（请求 -> 出画 -> 反向控制）
+
+```mermaid
+flowchart LR
+    A[Frontend request/start] --> B[Signaling Server]
+    B --> C[WebRTCSocket::_on_message]
+    C --> D[ClientPeerConnection]
+    D --> E[WebRTC SDP/ICE handshake]
+    E --> F[Client Ready]
+    F --> G[WebRTCSocket::_get_or_create_stream]
+    G --> H[ProcessManager launch/find window]
+    H --> I{Capture backend}
+    I -->|DXGI| J[DXGICapture]
+    I -->|fallback| K[WindowCapture]
+    J --> L[RGB frame]
+    K --> L
+    L --> M[Dynamic FPS policy]
+    M --> N[h264_encoder\nHW first, SW fallback]
+    N --> O[H264 access unit]
+    O --> P[Stream::on_sample]
+    P --> Q[sendFrame to all ready clients]
+    Q --> R[Frontend video render]
+    R --> S[Mouse/Keyboard events]
+    S --> T[DataChannel JSON]
+    T --> U[ClientPeerConnection input handlers]
+    U --> V[InputController + SendInput]
+```
+
+### 线程/队列模型（远端核心）
+
+```mermaid
+flowchart TB
+    subgraph Net["libdatachannel callbacks"]
+      WS[WebSocket callbacks]
+      PC[PeerConnection callbacks]
+      DC[DataChannel callbacks]
+    end
+
+    subgraph Ctrl["Control queue"]
+      WQ[DispatchQueue: WebRTCSocket]
+      WM[clients/stream/control ownership]
+    end
+
+    subgraph Media["Media queue"]
+      SQ[DispatchQueue: StreamQueue]
+      ST[Stream::send_sample loop]
+    end
+
+    subgraph CE["Capture + Encode"]
+      PM[ProcessManager::load_next_sample]
+      CAP{Capture}
+      DX[DXGI]
+      GD[GDI]
+      EN[H264 encoder]
+    end
+
+    WS --> WQ
+    PC --> WQ
+    WQ --> WM
+    WM --> ST
+    ST --> SQ --> PM
+    PM --> CAP
+    CAP --> DX --> EN
+    CAP --> GD --> EN
+    EN --> ST
+    ST --> PC
+    DC --> WM
+```
+
+### 设计目标与当前策略
+
+- **低延时优先**：编码器低延时参数、动态帧率、控制面与数据面分离。
+- **稳定优先**：硬件路径不可用或失败时自动回退到软件路径，避免黑屏/断流。
+- **多客户端观看**：同一条共享流可被多个前端观看；默认单控制者可输入。
+
 ## 已实现功能对照（对应你的 6 条）
 
 1. **三组件齐全**：前端 + 信令服务器 + Windows 客户端。

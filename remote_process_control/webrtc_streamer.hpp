@@ -8,7 +8,7 @@ class WebRTCStreamer {
 public:
     WebRTCStreamer();
     void start(const std::string& signalingUrl);
-    void pushH264Frame(const uint8_t* data, size_t size);
+    void push_h264_frame(const uint8_t* data, size_t size);
 
 private:
     std::shared_ptr<rtc::PeerConnection> pc;
@@ -18,6 +18,6 @@ private:
     RtpH264Packer rtpPacker;
     std::string signalingUrl;
 
-    void setupPeerConnection();
-    void handleSignaling();
+    void setup_peer_connection();
+    void handle_signaling();
 };

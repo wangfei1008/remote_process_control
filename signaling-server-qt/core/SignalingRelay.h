@@ -19,7 +19,7 @@ public:
 	 * @param messageText 原始 JSON 文本
 	 * @return 是否已成功转发（目标存在且已发送）
 	 */
-	bool relayTextMessage(QWebSocket *from, const QString &messageText) const;
+	bool relay_text_message(QWebSocket *from, const QString &messageText) const;
 
 private:
 	ClientRegistry *registry_ = nullptr;

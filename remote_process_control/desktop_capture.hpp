@@ -8,8 +8,8 @@ public:
     DesktopCapture();
     ~DesktopCapture();
     bool grab_frame(uint8_t* buffer, int width, int height);
-    int getWidth() const { return width; }
-    int getHeight() const { return height; }
+    int get_width() const { return width; }
+    int get_height() const { return height; }
 private:
     int width;
     int height;

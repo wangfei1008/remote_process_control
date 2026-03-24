@@ -17,5 +17,5 @@ private:
     std::string answer_sdp;
     bool answer_ready = false;
 
-    void handleOffer(const std::string& sdp);
+    void handle_offer(const std::string& sdp);
 };

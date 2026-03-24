@@ -19,7 +19,7 @@ int main() {
 
    // std::thread signalingThread([&]() { signaling.start(); });
 
-    streamer.start("ws://127.0.0.1:8000/server");  // 连接本地信令服务器
+    streamer.start("ws://127.0.0.1:8000/server");  // Connect to local signaling server.
 
     int frameSize = width * height * 3;
     std::vector<uint8_t> rgbBuffer(frameSize);
@@ -30,15 +30,15 @@ int main() {
             continue;
         }
 
-        if (!encoder.encodeFrame(rgbBuffer.data(), frameSize)) {
+        if (!encoder.encode_frame(rgbBuffer.data(), frameSize)) {
             std::cerr << "Encode failed" << std::endl;
             continue;
         }
 
-        AVPacket* pkt = encoder.getPacket();
+        AVPacket* pkt = encoder.get_packet();
         if (pkt && pkt->size > 0) {
-            streamer.pushH264Frame(pkt->data, pkt->size);
-            encoder.freePacket();
+            streamer.push_h264_frame(pkt->data, pkt->size);
+            encoder.free_packet();
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33)); // 30fps

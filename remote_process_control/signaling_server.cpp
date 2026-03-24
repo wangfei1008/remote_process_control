@@ -9,7 +9,7 @@ SignalingServer::SignalingServer() {
     rtc::InitLogger(rtc::LogLevel::Info);
 
     rtc::Configuration config;
-    // ICE servers 可以加这里
+    // ICE servers can be configured here.
     pc = std::make_shared<rtc::PeerConnection>(config);
 
     pc->onLocalDescription([this](rtc::Description description) {
@@ -33,7 +33,7 @@ SignalingServer::SignalingServer() {
         });
 }
 
-void SignalingServer::handleOffer(const std::string& sdp) {
+void SignalingServer::handle_offer(const std::string& sdp) {
     rtc::Description offer(sdp, rtc::Description::Type::Offer);
     pc->setRemoteDescription(offer);
     pc->setLocalDescription();
@@ -54,9 +54,9 @@ void SignalingServer::start(int port) {
             std::string sdp = j["sdp"];
             std::cout << "Received SDP Offer:\n" << sdp << std::endl;
 
-            handleOffer(sdp);
+            handle_offer(sdp);
 
-            // 等待 answer SDP 生成
+            // Wait for answer SDP generation.
             {
                 std::unique_lock<std::mutex> lock(mtx);
                 cv.wait(lock, [this]() { return answer_ready; });

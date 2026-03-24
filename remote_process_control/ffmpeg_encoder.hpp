@@ -9,9 +9,9 @@ class FFmpegEncoder {
 public:
     FFmpegEncoder(int width, int height, int fps);
     ~FFmpegEncoder();
-    bool encodeFrame(const uint8_t* rgbData, int size);
-    AVPacket* getPacket();
-    void freePacket();
+    bool encode_frame(const uint8_t* rgbData, int size);
+    AVPacket* get_packet();
+    void free_packet();
 
 private:
     AVCodecContext* codecCtx = nullptr;

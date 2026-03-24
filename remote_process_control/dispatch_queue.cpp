@@ -14,7 +14,7 @@ DispatchQueue::DispatchQueue(std::string name, size_t threadCount) :name{std::mo
 {
     for(size_t i = 0; i < threads.size(); i++)
     {
-        threads[i] = std::thread(&DispatchQueue::dispatchThreadHandler, this);
+        threads[i] = std::thread(&DispatchQueue::dispatch_thread_handler, this);
     }
 }
 
@@ -35,7 +35,7 @@ DispatchQueue::~DispatchQueue() {
     }
 }
 
-void DispatchQueue::removePending() {
+void DispatchQueue::remove_pending() {
     std::unique_lock<std::mutex> lock(lockMutex);
     queue = {};
 }
@@ -60,7 +60,7 @@ void DispatchQueue::dispatch(fp_t&& op) {
     condition.notify_one();
 }
 
-void DispatchQueue::dispatchThreadHandler(void) 
+void DispatchQueue::dispatch_thread_handler(void) 
 {
     std::unique_lock<std::mutex> lock(lockMutex);
     do {

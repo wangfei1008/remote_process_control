@@ -9,9 +9,9 @@ public:
 
     RtpH264Packer(uint8_t payloadType = 96, size_t mtu = 1200);
 
-    void setSsrc(uint32_t ssrc);
-    void setSequence(uint16_t seq);
-    void setTimestamp(uint32_t timestamp);
+    void set_ssrc(uint32_t ssrc);
+    void set_sequence(uint16_t seq);
+    void set_timestamp(uint32_t timestamp);
     void pack(const uint8_t* nal, size_t len, RtpCallback cb);
 
 private:
@@ -21,6 +21,6 @@ private:
     uint16_t seq = 0;
     uint32_t timestamp = 0;
 
-    void writeHeader(std::vector<uint8_t>& rtp, bool marker);
+    void write_header(std::vector<uint8_t>& rtp, bool marker);
 };
 

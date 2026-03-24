@@ -29,7 +29,7 @@ public:
     // dispatch and move
     void dispatch(fp_t&& op);
 
-    void removePending();
+    void remove_pending();
 
     // Deleted operations
     DispatchQueue(const DispatchQueue& rhs) = delete;
@@ -45,7 +45,7 @@ private:
     std::condition_variable condition;
     bool quit = false;
 
-    void dispatchThreadHandler(void);
+    void dispatch_thread_handler(void);
 };
 
 #endif /* dispatchqueue_hpp */

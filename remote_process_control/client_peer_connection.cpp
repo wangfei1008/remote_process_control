@@ -54,8 +54,8 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
 
     auto dc = m_peer_connection->createDataChannel("ping-pong");
     const std::string clientId = m_id;
-    // 通道一打开即尝试授予控制权并下发 controlGranted，避免仅依赖前端 controlRequest 时出现竞态，
-    // 导致 m_controller_id 仍为空、所有鼠标键盘消息被丢弃。
+    // Try to grant control as soon as the DataChannel opens and send controlGranted.
+    // This avoids races when relying only on a frontend controlRequest message.
 
     dc->onOpen([clientId, wdc = make_weak_ptr(dc), this]() {
         if (auto ch = wdc.lock()) {
@@ -355,7 +355,7 @@ void ClientPeerConnection::_handle_mouse_wheel(const nlohmann::json& json)
 
 static int json_get_windows_vk(const nlohmann::json& json)
 {
-	// 前端 "key"/"code" 为字符串，不能用 value("key",0) 否则会 type_error 整包丢弃
+	// Frontend "key"/"code" fields are strings; avoid value("key", 0) to prevent type_error drops.
 	if (json.contains("vk")) {
 		try {
 			const auto& jv = json["vk"];

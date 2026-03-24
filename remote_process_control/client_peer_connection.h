@@ -46,7 +46,7 @@ public:
     void set_state(State state);
     State get_state();
 
-    /** 用于延时诊断（frameMark 等）向浏览器发送 JSON */
+    /** Sends diagnostic JSON messages (for example frameMark) to the browser. */
     std::shared_ptr<rtc::DataChannel> get_data_channel() const;
 
 	void set_callback(create_stream_callback cb);

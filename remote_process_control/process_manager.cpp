@@ -8,12 +8,24 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 
 static uint64_t rpc_unix_epoch_ms()
 {
     using namespace std::chrono;
     return static_cast<uint64_t>(
         duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+}
+
+static bool rpc_probe_dxgi_capture_support()
+{
+    HMODULE dxgi = LoadLibraryA("dxgi.dll");
+    HMODULE d3d11 = LoadLibraryA("d3d11.dll");
+    const bool ok = (dxgi != nullptr && d3d11 != nullptr);
+    if (dxgi) FreeLibrary(dxgi);
+    if (d3d11) FreeLibrary(d3d11);
+    return ok;
 }
 
 // Parse H264 avcC extradata into length-prefixed SPS/PPS NAL units.
@@ -77,11 +89,42 @@ ProcessManager::ProcessManager()
     : m_width(1536)
     , m_height(864)
     , m_fps(30)
+    , m_active_fps(30)
+    , m_idle_fps(5)
+    , m_current_fps(30)
     , running(false)
     , sampleTime_us(0)
 {
     ZeroMemory(&m_pi, sizeof(m_pi));
-    
+    if (const char* envCaptureAll = std::getenv("RPC_CAPTURE_ALL_WINDOWS")) {
+        m_capture_all_windows = (std::atoi(envCaptureAll) != 0);
+    }
+    if (const char* envIdleFps = std::getenv("RPC_IDLE_FPS")) {
+        m_idle_fps = std::max(1, std::atoi(envIdleFps));
+    }
+    if (const char* envActiveFps = std::getenv("RPC_ACTIVE_FPS")) {
+        m_active_fps = std::max(1, std::atoi(envActiveFps));
+    }
+    if (m_idle_fps > m_active_fps) m_idle_fps = m_active_fps;
+    m_fps = m_active_fps;
+    m_current_fps = m_active_fps;
+
+    m_hw_capture_supported = (rpc_probe_dxgi_capture_support() && m_dxgiCapture.is_available());
+    if (const char* envCaptureBackend = std::getenv("RPC_CAPTURE_BACKEND")) {
+        std::string mode = envCaptureBackend;
+        std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (mode == "dxgi") m_hw_capture_requested = true;
+        else if (mode == "gdi") m_hw_capture_requested = false;
+        else m_hw_capture_requested = m_hw_capture_supported; // auto
+    } else {
+        m_hw_capture_requested = m_hw_capture_supported; // default auto
+    }
+    m_hw_capture_active = (m_hw_capture_requested && m_hw_capture_supported);
+    std::cout << "[capture] dxgi_supported=" << (m_hw_capture_supported ? 1 : 0)
+              << " requested=" << (m_hw_capture_requested ? 1 : 0)
+              << " active=" << (m_hw_capture_active ? 1 : 0)
+              << " mode=" << (m_capture_all_windows ? "all-windows" : "main-window")
+              << std::endl;
 }
 
 ProcessManager::~ProcessManager()
@@ -229,9 +272,9 @@ HWND ProcessManager::launch_process(const std::string& exe_path)
         m_height = rect.bottom - rect.top;
 
 
-        // ?????????YUV420???
+        // Enforce even dimensions for YUV420 encoding.
         m_width = (m_width + 1) & ~1;
-		m_height = (m_height + 1) & ~1;// ?????????
+		m_height = (m_height + 1) & ~1; // keep height even
   //      m_width = (m_width + 3) & ~3;
   //      m_height = (m_height + 3) & ~3;
   //      m_width = 820;
@@ -271,6 +314,10 @@ void ProcessManager::start()
     running = true;
     sampleTime_us = 0;
     m_encode_frame_seq = 0;
+    m_stable_frame_count = 0;
+    m_has_last_sig = false;
+    m_last_frame_sig = 0;
+    m_current_fps = m_active_fps;
 }
 
 void ProcessManager::stop()
@@ -291,6 +338,60 @@ void ProcessManager::notify_remote_exit()
         } catch (...) {
         }
     }
+}
+
+uint64_t ProcessManager::quick_frame_signature(const std::vector<uint8_t>& frame, int width, int height) const
+{
+    if (frame.empty() || width <= 0 || height <= 0) return 0;
+    const int bytesPerPixel = 3;
+    const size_t stride = static_cast<size_t>(width) * bytesPerPixel;
+    const int sampleRows = std::min(height, 32);
+    const int sampleCols = std::min(width, 64);
+    const int rowStep = std::max(1, height / sampleRows);
+    const int colStep = std::max(1, width / sampleCols);
+    uint64_t sig = 1469598103934665603ull; // FNV-1a basis
+    for (int y = 0; y < height; y += rowStep) {
+        const size_t rowBase = static_cast<size_t>(y) * stride;
+        for (int x = 0; x < width; x += colStep) {
+            const size_t idx = rowBase + static_cast<size_t>(x) * bytesPerPixel;
+            if (idx + 2 >= frame.size()) break;
+            sig ^= static_cast<uint64_t>(frame[idx + 0]); sig *= 1099511628211ull;
+            sig ^= static_cast<uint64_t>(frame[idx + 1]); sig *= 1099511628211ull;
+            sig ^= static_cast<uint64_t>(frame[idx + 2]); sig *= 1099511628211ull;
+        }
+    }
+    return sig;
+}
+
+std::vector<uint8_t> ProcessManager::capture_main_window_image(HWND hwnd, int& outWidth, int& outHeight, int& outMinLeft, int& outMinTop)
+{
+    outWidth = 0;
+    outHeight = 0;
+    outMinLeft = 0;
+    outMinTop = 0;
+    if (!hwnd || !IsWindow(hwnd)) return {};
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) return {};
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return {};
+    auto frame = m_windowCapture.capture(hwnd, width, height);
+    if (frame.empty()) return {};
+    outWidth = width & ~1;
+    outHeight = height & ~1;
+    outMinLeft = rect.left;
+    outMinTop = rect.top;
+    if (outWidth <= 0 || outHeight <= 0) return {};
+    if (outWidth != width || outHeight != height) {
+        std::vector<uint8_t> cropped(static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 3u, 0);
+        for (int y = 0; y < outHeight; ++y) {
+            const size_t src = static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+            const size_t dst = static_cast<size_t>(y) * static_cast<size_t>(outWidth) * 3u;
+            std::memcpy(cropped.data() + dst, frame.data() + src, static_cast<size_t>(outWidth) * 3u);
+        }
+        frame.swap(cropped);
+    }
+    return frame;
 }
 
 void ProcessManager::load_next_sample()
@@ -361,14 +462,49 @@ void ProcessManager::load_next_sample()
     int capMinLeft = 0, capMinTop = 0;
     const std::chrono::steady_clock::time_point t_cap_begin = std::chrono::steady_clock::now();
 
-    std::vector<uint8_t> frame = capture_all_windows_image(
-        m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
+    std::vector<uint8_t> frame;
+    if (m_hw_capture_active) {
+        if (m_capture_all_windows) {
+            // Current DXGI path is optimized for single-window low-latency capture.
+            // Keep multi-window mode on existing compositor path.
+            frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
+        } else {
+            frame = m_dxgiCapture.capture_window_rgb(m_mainWindow, width, height, capMinLeft, capMinTop);
+            if (frame.empty()) {
+                // Runtime fallback if desktop duplication temporarily fails.
+                frame = capture_main_window_image(m_mainWindow, width, height, capMinLeft, capMinTop);
+            }
+        }
+    } else if (m_capture_all_windows) {
+        frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
+    } else {
+        frame = capture_main_window_image(m_mainWindow, width, height, capMinLeft, capMinTop);
+    }
 
     const std::chrono::steady_clock::time_point t_after_cap = std::chrono::steady_clock::now();
     if (frame.empty() || width <= 0 || height <= 0) {
         sample.clear();
         sampleTime_us += get_sample_duration_us();
         return;
+    }
+
+    const uint64_t sig = quick_frame_signature(frame, width, height);
+    const bool frameChanged = (!m_has_last_sig || sig != m_last_frame_sig);
+    m_last_frame_sig = sig;
+    m_has_last_sig = true;
+
+    const uint64_t nowMs = rpc_unix_epoch_ms();
+    const uint64_t lastInputMs = InputController::last_input_activity_ms();
+    const bool recentInput = (lastInputMs > 0 && nowMs >= lastInputMs && (nowMs - lastInputMs) <= static_cast<uint64_t>(m_recent_input_boost_ms));
+
+    if (frameChanged || recentInput) {
+        m_stable_frame_count = 0;
+        m_current_fps = m_active_fps;
+    } else {
+        ++m_stable_frame_count;
+        if (m_stable_frame_count >= m_idle_enter_stable_frames) {
+            m_current_fps = m_idle_fps;
+        }
     }
 
     const bool layout_changed = (width != m_width || height != m_height);
@@ -393,7 +529,7 @@ void ProcessManager::load_next_sample()
     const std::chrono::steady_clock::time_point t_enc_end = std::chrono::steady_clock::now();
 
     if (ok && !h264_data.empty()) {
-        // 直接把编码后的 H264 access unit 作为 payload 发送给客户端。
+        // Send the encoded H264 access unit directly as the client payload.
         sample = rtc::binary(h264_data.begin(), h264_data.end());
         sampleTime_us += get_sample_duration_us();
 
@@ -404,7 +540,7 @@ void ProcessManager::load_next_sample()
         m_last_frame_unix_ms = rpc_unix_epoch_ms();
         m_had_successful_video = true;
     } else {
-        // 编码失败或本帧无码流也必须推进时间轴并清空 sample，否则会反复 sendFrame。
+        // Even on encoding failure or empty output, advance timeline and clear sample to avoid repeated sendFrame.
         sample.clear();
         sampleTime_us += get_sample_duration_us();
     }
@@ -422,8 +558,8 @@ uint64_t ProcessManager::get_sample_time_us()
 
 uint64_t ProcessManager::get_sample_duration_us()
 {
-    if (m_fps > 0)
-        return 1000000ull / m_fps;
+    if (m_current_fps > 0)
+        return 1000000ull / static_cast<uint64_t>(m_current_fps);
     return 0;
 }
 
@@ -464,7 +600,7 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
         std::vector<uint8_t> image;
     };
 
-    // 1. ???Z??????????????
+    // 1) Enumerate visible windows for this process in z-order.
     std::vector<HWND> hwnds;
     EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
         DWORD winPid = 0;
@@ -476,7 +612,7 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
         return TRUE;
         }, (LPARAM)pid);
 
-    // ????EnumWindows?????????vector?????????????????????
+    // Re-run EnumWindows using static context because callback cannot capture state.
     static std::vector<HWND>* s_zorder_vec = nullptr;
     s_zorder_vec = &hwnds;
     EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
@@ -497,7 +633,7 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
         return {};
     }
 
-    // 2. ???????????????
+    // 2) Capture image data for each collected window.
     std::vector<WindowInfo> windows;
     for (HWND hwnd : hwnds) {
         RECT rect;
@@ -519,7 +655,7 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
         return {};
     }
 
-    // 3. ??????????????
+    // 3) Compute merged bounding rectangle.
     int minLeft = INT_MAX, minTop = INT_MAX, maxRight = INT_MIN, maxBottom = INT_MIN;
     for (const auto& win : windows) {
         minLeft = min(minLeft, win.rect.left);
@@ -557,7 +693,7 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
     outMinLeft = clipRect.left;
     outMinTop = clipRect.top;
 
-    // 4. Z???????????? clipRect ???????????????????????
+    // 4) Composite windows back-to-front into the merged clip rectangle.
     std::vector<uint8_t> mergedImage(static_cast<size_t>(totalWidth) * static_cast<size_t>(totalHeight) * 3, 0);
     for (auto it = windows.rbegin(); it != windows.rend(); ++it) {
         const auto& win = *it;

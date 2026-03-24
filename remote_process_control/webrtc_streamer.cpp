@@ -3,18 +3,18 @@
 
 WebRTCStreamer::WebRTCStreamer() {
     rtc::InitLogger(rtc::LogLevel::Info);
-    rtpPacker.setSsrc(12345678); // 任意数
-    rtpPacker.setSequence(0);
+    rtpPacker.set_ssrc(12345678); // arbitrary SSRC
+    rtpPacker.set_sequence(0);
 }
 
 void WebRTCStreamer::start(const std::string& url) {
     signalingUrl = url;
-    setupPeerConnection();
-    handleSignaling();  
+    setup_peer_connection();
+    handle_signaling();  
     
 }
 
-void WebRTCStreamer::setupPeerConnection() {
+void WebRTCStreamer::setup_peer_connection() {
     rtc::Configuration config;
     config.iceServers.emplace_back("stun:stun.l.google.com:19302");
     config.disableAutoNegotiation = false;
@@ -45,7 +45,7 @@ void WebRTCStreamer::setupPeerConnection() {
         });
 }
 
-void WebRTCStreamer::handleSignaling() {
+void WebRTCStreamer::handle_signaling() {
    //ws = std::make_unique<rtc::WebSocket>(signalingUrl);
     ws = std::make_shared<rtc::WebSocket>();
 
@@ -119,12 +119,12 @@ void WebRTCStreamer::handleSignaling() {
 //    }
 //}
 
-void WebRTCStreamer::pushH264Frame(const uint8_t* data, size_t size) {
+void WebRTCStreamer::push_h264_frame(const uint8_t* data, size_t size) {
     if (!videoTrack || !data || size < 4) return;
 
     size_t i = 0;
     while (i + 4 < size) {
-        // 查找起始码（0x00000001 或 0x000001）
+        // Find NAL start code (0x00000001 or 0x000001).
         size_t start = i;
         size_t nal_start = std::string::npos;
         if (data[i] == 0 && data[i + 1] == 0) {
@@ -141,7 +141,7 @@ void WebRTCStreamer::pushH264Frame(const uint8_t* data, size_t size) {
             continue;
         }
 
-        // 找下一个 start code
+        // Find the next start code.
         size_t next_nal = nal_start;
         while (next_nal + 4 < size) {
             if (data[next_nal] == 0 && data[next_nal + 1] == 0 &&
@@ -153,13 +153,13 @@ void WebRTCStreamer::pushH264Frame(const uint8_t* data, size_t size) {
 
         size_t nal_size = next_nal - nal_start;
 
-        // 有效 NALU
+        // Valid NALU.
         if (nal_size > 0 && (nal_start + nal_size <= size)) {
-            // 使用 RTP 封装并发送
+            // Packetize as RTP and send.
             auto now = std::chrono::steady_clock::now();
             auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() * 90;
 
-            rtpPacker.setTimestamp(static_cast<uint32_t>(timestamp));
+            rtpPacker.set_timestamp(static_cast<uint32_t>(timestamp));
             rtpPacker.pack(data + nal_start, nal_size, [this](const uint8_t* rtp, size_t len, bool marker) {
                 std::vector<uint8_t> rtpPacket(rtp, rtp + len); // Convert raw pointer to std::vector
                 videoTrack->send(reinterpret_cast<const std::byte*>(rtpPacket.data()), rtpPacket.size()); // Convert uint8_t* to const char*

@@ -11,15 +11,15 @@ std::vector<uint8_t> WindowCapture::capture(HWND hwnd, int width, int height)
     HBITMAP hBitmap = CreateCompatibleBitmap(hWindowDC, width, height);
     HGDIOBJ oldBitmap = SelectObject(hMemDC, hBitmap);
 
-    // 把窗口内容拷贝到内存DC
+    // Copy window content into a memory DC.
     //BitBlt(hMemDC, 0, 0, width, height, hWindowDC, 0, 0, SRCCOPY | CAPTUREBLT);
-    // 推荐用PrintWindow，兼容更多窗口类型
+    // Prefer PrintWindow for better compatibility across window types.
     BOOL ok = PrintWindow(hwnd, hMemDC, PW_RENDERFULLCONTENT);
     if (!ok) {
         BitBlt(hMemDC, 0, 0, width, height, hWindowDC, 0, 0, SRCCOPY | CAPTUREBLT);
     }
 
-    // 获取位图数据
+    // Read bitmap data.
     BITMAPINFOHEADER bi = {};
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = width;
@@ -28,14 +28,14 @@ std::vector<uint8_t> WindowCapture::capture(HWND hwnd, int width, int height)
     bi.biBitCount = 24;
     bi.biCompression = BI_RGB;
 
-    int rowSize = ((width * 3 + 3) & ~3);// 每行字节数需4字节对齐
+    int rowSize = ((width * 3 + 3) & ~3); // each row is 4-byte aligned
 	//int rowSize = width * 3; 
     //buffer.resize(rowSize * height);
 
     std::vector<uint8_t> raw(rowSize * height);
     int lines = GetDIBits(hMemDC, hBitmap, 0, height, raw.data(), reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS);
 
-    // 去掉每行padding
+    // Strip per-row padding.
     buffer.resize(width * 3 * height);
     for (int y = 0; y < height; ++y) {
         std::memcpy(
@@ -48,7 +48,7 @@ std::vector<uint8_t> WindowCapture::capture(HWND hwnd, int width, int height)
         std::swap(buffer[i], buffer[i + 2]);
     }
 
-    // 清理
+    // Cleanup.
     SelectObject(hMemDC, oldBitmap);
     DeleteObject(hBitmap);
     DeleteDC(hMemDC);

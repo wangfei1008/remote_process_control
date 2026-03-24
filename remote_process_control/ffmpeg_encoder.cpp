@@ -50,7 +50,7 @@ FFmpegEncoder::~FFmpegEncoder() {
     av_packet_free(&pkt);
 }
 
-bool FFmpegEncoder::encodeFrame(const uint8_t* rgbData, int size) {
+bool FFmpegEncoder::encode_frame(const uint8_t* rgbData, int size) {
     struct SwsContext* swsCtx = sws_getContext(
         width, height, AV_PIX_FMT_BGR24,
         width, height, AV_PIX_FMT_YUV420P,
@@ -89,11 +89,11 @@ bool FFmpegEncoder::encodeFrame(const uint8_t* rgbData, int size) {
     return true;
 }
 
-AVPacket* FFmpegEncoder::getPacket() {
+AVPacket* FFmpegEncoder::get_packet() {
     return pkt;
 }
 
-void FFmpegEncoder::freePacket() {
+void FFmpegEncoder::free_packet() {
     av_packet_unref(pkt);
 }
 

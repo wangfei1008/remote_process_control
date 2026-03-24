@@ -173,7 +173,7 @@ void Stream::stop()
     std::lock_guard lock(m_mutex);
     if (!m_c_is_running) return;
     m_is_running = false;
-    m_dispatch_queue.removePending();
+    m_dispatch_queue.remove_pending();
     m_c_audio->stop();
     m_c_video->stop();
 }

@@ -26,9 +26,9 @@ void DesktopScreenSource::load_next_sample()
     if (!running) return;
     std::vector<uint8_t> rbg_frame(m_width * m_height * 3);
     if (capture.grab_frame(rbg_frame.data(), m_width, m_height)) {
-        // ?????H264
+        // Encode the captured RGB frame into H264.
         std::vector<uint8_t> h264_data;
-        // ?????????????encode_rgb(AVCodecContext*, const uint8_t* rgb, int width, int height, std::vector<uint8_t>& out)
+        // encode_rgb signature includes frame sequence and keyframe control.
         bool ok = encode_rgb(m_av_codec_ctx, rbg_frame.data(), m_width, m_height, m_encode_frame_seq, h264_data);
         if (ok && !h264_data.empty()) {
             std::vector<std::byte> h264_bytes(h264_data.size());
@@ -43,7 +43,7 @@ void DesktopScreenSource::load_next_sample()
                 length = ntohl(length);
                 auto naluStartIndex = i + 4;
                 auto naluEndIndex = naluStartIndex + length;
-                if (naluEndIndex > sample.size()) break; // ??????
+                if (naluEndIndex > sample.size()) break; // Invalid/truncated NAL unit length.
                 auto header = reinterpret_cast<rtc::NalUnitHeader*>(sample.data() + naluStartIndex);
                 auto type = header->unitType();
                 switch (type) {
@@ -75,7 +75,7 @@ uint64_t DesktopScreenSource::get_sample_time_us()
 
 uint64_t DesktopScreenSource::get_sample_duration_us()
 {
-    return 1000000 / fps; // ???????????��???
+    return 1000000 / fps; // Frame duration in microseconds.
 }
 
 std::vector<std::byte> DesktopScreenSource::initial_nalus()

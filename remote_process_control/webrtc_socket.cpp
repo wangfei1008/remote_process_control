@@ -78,7 +78,7 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     if (it == message.end())return;
 
     std::string type = it->get<std::string>();
-    if (type == "request") //???????
+    if (type == "request") // start session request
     {
         // optional process path from frontend
         if (message.contains("exePath")) {
@@ -109,7 +109,7 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
         m_clients.emplace(id, client);
         pc->setLocalDescription();
     }
-    else if (type == "answer") //SDP ???
+    else if (type == "answer") // SDP answer
     {
         if (auto jt = m_clients.find(id); jt != m_clients.end()) 
         {
@@ -240,8 +240,9 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                 }
             }
 
-            // 测试精确对齐：每帧都发 frameMark(seq, srvMs/capMs/encMs)
-            if (true) {
+            // Send frameMark at a lower frequency to reduce DataChannel/JSON overhead.
+            constexpr uint64_t kFrameMarkInterval = 10;
+            if ((videoFrameIndex % kFrameMarkInterval) == 0) {
                 uint64_t srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count());
                 uint32_t cap_ms = 0;

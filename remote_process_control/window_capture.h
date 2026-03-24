@@ -6,7 +6,7 @@
 class WindowCapture 
 {
 public:
-    // 采集窗口内容，返回BGR格式的字节流
+    // Capture window content and return a BGR byte buffer.
     std::vector<uint8_t> capture(HWND hwnd, int width, int height);
 };
 

@@ -24,11 +24,11 @@ public:
 	bool listen(const QHostAddress &address = QHostAddress::Any, quint16 port = 0);
 
 private slots:
-	void onNewConnection();
-	void onDisconnected();
-	void onWebSocketError(QAbstractSocket::SocketError error);
-	void onBinaryMessageReceived(const QByteArray &message);
-	void onTextMessageReceived(const QString &message);
+	void on_new_connection();
+	void on_disconnected();
+	void on_web_socket_error(QAbstractSocket::SocketError error);
+	void on_binary_message_received(const QByteArray &message);
+	void on_text_message_received(const QString &message);
 
 private:
 	QWebSocketServer *server = nullptr;

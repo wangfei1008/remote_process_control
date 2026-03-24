@@ -4,11 +4,11 @@ RtpH264Packer::RtpH264Packer(uint8_t payloadType, size_t mtu)
     : payloadType(payloadType), mtu(mtu) {
 }
 
-void RtpH264Packer::setSsrc(uint32_t s) { ssrc = s; }
-void RtpH264Packer::setSequence(uint16_t s) { seq = s; }
-void RtpH264Packer::setTimestamp(uint32_t t) { timestamp = t; }
+void RtpH264Packer::set_ssrc(uint32_t s) { ssrc = s; }
+void RtpH264Packer::set_sequence(uint16_t s) { seq = s; }
+void RtpH264Packer::set_timestamp(uint32_t t) { timestamp = t; }
 
-void RtpH264Packer::writeHeader(std::vector<uint8_t>& rtp, bool marker) {
+void RtpH264Packer::write_header(std::vector<uint8_t>& rtp, bool marker) {
     rtp.resize(12);
     rtp[0] = 0x80;
     rtp[1] = payloadType | (marker ? 0x80 : 0x00);
@@ -32,7 +32,7 @@ void RtpH264Packer::pack(const uint8_t* nal, size_t len, RtpCallback cb) {
 
     if (len <= mtu - 12) {
         std::vector<uint8_t> rtp;
-        writeHeader(rtp, true);
+        write_header(rtp, true);
         rtp.insert(rtp.end(), nal, nal + len);
         cb(rtp.data(), rtp.size(), true);
         seq++;
@@ -46,7 +46,7 @@ void RtpH264Packer::pack(const uint8_t* nal, size_t len, RtpCallback cb) {
             std::vector<uint8_t> rtp;
             bool start = (offset == 1);
             bool end = (offset + size >= len);
-            writeHeader(rtp, end);
+            write_header(rtp, end);
 
             uint8_t fu_indicator = (nal_header & 0xE0) | 28;
             uint8_t fu_header = (start ? 0x80 : 0x00) | (end ? 0x40 : 0x00) | nal_type;
