@@ -52,6 +52,7 @@ using json = nlohmann::json;
 
 static std::atomic<bool> g_exitRequested{false};
 static HWND g_hwnd = nullptr;
+static std::atomic<bool> g_pingThreadStarted{false};
 
 struct SharedVideoFrame {
 	std::vector<uint8_t> bgra; // size = w*h*4
@@ -69,6 +70,9 @@ static std::shared_ptr<rtc::DataChannel> g_dataChannel;
 
 static std::atomic<bool> g_controlEnabled{false};
 static std::atomic<bool> g_inputArmed{false};
+static std::atomic<bool> g_videoTrackAttached{false};
+static std::atomic<int> g_lastAbsX{-1};
+static std::atomic<int> g_lastAbsY{-1};
 
 static std::atomic<int> g_videoW{0};
 static std::atomic<int> g_videoH{0};
@@ -584,6 +588,9 @@ static void RenderOneFrame(int vw, int vh) {
 }
 
 static void StartLatencyPingThread() {
+	if (g_pingThreadStarted.exchange(true, std::memory_order_acq_rel)) {
+		return;
+	}
 	// Send latPing periodically to compute theta.
 	std::thread([] {
 		uint64_t pingSeq = 0;
@@ -608,6 +615,7 @@ static void StartLatencyPingThread() {
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 		}
+		g_pingThreadStarted.store(false, std::memory_order_release);
 	}).detach();
 }
 
@@ -696,6 +704,9 @@ static void SetupDataChannelCallbacks(const std::shared_ptr<rtc::PeerConnection>
 
 		dc->onClosed([] {
 			g_controlEnabled.store(false, std::memory_order_relaxed);
+			g_videoTrackAttached.store(false, std::memory_order_relaxed);
+			std::lock_guard<std::mutex> lk(g_dcMtx);
+			g_dataChannel.reset();
 		});
 	});
 }
@@ -728,7 +739,7 @@ static std::shared_ptr<rtc::PeerConnection> SetupPeerConnectionForAnswerer(
 
 	pc->onTrack([&](std::shared_ptr<rtc::Track> track) {
 		if (!track) return;
-		if (track->mid() != "video-stream") return;
+		if (g_videoTrackAttached.exchange(true, std::memory_order_acq_rel)) return;
 
 		auto depacketizer = std::make_shared<rtc::H264RtpDepacketizer>(
 			rtc::H264RtpDepacketizer::Separator::LongStartSequence);
@@ -844,7 +855,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		}
 		if (!g_inputArmed.load(std::memory_order_relaxed)) return 0;
 		if (!g_controlEnabled.load(std::memory_order_relaxed)) return 0;
-		if (!g_dataChannel) return 0;
 
 		const int vk = (int)wParam;
 		const int keyCode = vk;
@@ -870,7 +880,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 	case WM_KEYUP: {
 		if (!g_inputArmed.load(std::memory_order_relaxed)) return 0;
 		if (!g_controlEnabled.load(std::memory_order_relaxed)) return 0;
-		if (!g_dataChannel) return 0;
 
 		const int vk = (int)wParam;
 		const int keyCode = vk;
@@ -904,12 +913,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		int absX = 0, absY = 0;
 		MapClientToVideo(x, y, absX, absY);
 
-		static int lastAbsX = -1;
-		static int lastAbsY = -1;
-		const int dx = (lastAbsX < 0) ? 0 : (absX - lastAbsX);
-		const int dy = (lastAbsY < 0) ? 0 : (absY - lastAbsY);
-		lastAbsX = absX;
-		lastAbsY = absY;
+		const int prevX = g_lastAbsX.load(std::memory_order_relaxed);
+		const int prevY = g_lastAbsY.load(std::memory_order_relaxed);
+		const int dx = (prevX < 0) ? 0 : (absX - prevX);
+		const int dy = (prevY < 0) ? 0 : (absY - prevY);
+		g_lastAbsX.store(absX, std::memory_order_relaxed);
+		g_lastAbsY.store(absY, std::memory_order_relaxed);
 
 		const int vw = g_videoW.load(std::memory_order_relaxed);
 		const int vh = g_videoH.load(std::memory_order_relaxed);
@@ -989,8 +998,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 	case WM_MOUSEWHEEL: {
 		if (!g_inputArmed.load(std::memory_order_relaxed)) return 0;
 		if (!g_controlEnabled.load(std::memory_order_relaxed)) return 0;
-		const int x = GET_X_LPARAM(lParam);
-		const int y = GET_Y_LPARAM(lParam);
+		POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+		ScreenToClient(hwnd, &pt);
+		const int x = pt.x;
+		const int y = pt.y;
 		if (!IsInsideVideoRect(x, y)) return 0;
 
 		const int deltaY = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -1002,6 +1013,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 	}
 	case WM_KILLFOCUS:
 		g_inputArmed.store(false, std::memory_order_relaxed);
+		g_lastAbsX.store(-1, std::memory_order_relaxed);
+		g_lastAbsY.store(-1, std::memory_order_relaxed);
 		return 0;
 	default:
 		return DefWindowProc(hwnd, msg, wParam, lParam);

@@ -33,6 +33,7 @@ private:
 private:
     std::shared_ptr<rtc::WebSocket> m_ws;
     std::string m_signaling_ip;
+    std::string m_signaling_url;
 	int m_signaling_port;
 	DispatchQueue m_thread_queue; // Single thread for WebRTC operations
 

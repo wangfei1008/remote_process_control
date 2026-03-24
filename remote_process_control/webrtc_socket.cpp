@@ -15,6 +15,7 @@ using namespace std::chrono_literals;
 WebRTCSocket::WebRTCSocket() 
     : m_ws(nullptr)
     , m_signaling_ip("")
+    , m_signaling_url("")
     , m_thread_queue("WebRTCSocket")
 {
 	rtc::InitLogger(rtc::LogLevel::Info);
@@ -41,15 +42,20 @@ void WebRTCSocket::_init_signaling()
 
     m_ws->onOpen([this]() { LOGINFO("url = %s, WebSocket connected, signaling ready", m_signaling_url.c_str()); });
     m_ws->onClosed([this]() { LOGINFO("url = %s, WebSocket closed", m_signaling_url.c_str()); });
-    m_ws->onError([](const std::string& error) { LOGERROR("url = %s, WebSocket failed: %s", m_signaling_url.c_str(), error.c_str()); });
-	m_ws->onMessage([&](const std::variant<rtc::binary, std::string>& data) 
+    m_ws->onError([this](const std::string& error) { LOGERROR("url = %s, WebSocket failed: %s", m_signaling_url.c_str(), error.c_str()); });
+	m_ws->onMessage([this](const std::variant<rtc::binary, std::string>& data) 
                     {    
                         if (std::holds_alternative<std::string>(data))
                         {
-                            LOGINFO("message data = %s", std::get<std::string>(data).c_str());
-                            nlohmann::json message = nlohmann::json::parse(std::get<std::string>(data));
-                            auto ptr_ws = this;
-                            m_thread_queue.dispatch([message, ptr_ws](){ ptr_ws->_on_message(message);});
+                            try {
+                                LOGINFO("message data = %s", std::get<std::string>(data).c_str());
+                                nlohmann::json message = nlohmann::json::parse(std::get<std::string>(data));
+                                m_thread_queue.dispatch([message, this](){ this->_on_message(message); });
+                            } catch (const std::exception& e) {
+                                std::cerr << "[signaling] invalid JSON message: " << e.what() << std::endl;
+                            } catch (...) {
+                                std::cerr << "[signaling] invalid JSON message: unknown error" << std::endl;
+                            }
                         }
                         else
                         {
@@ -57,9 +63,17 @@ void WebRTCSocket::_init_signaling()
                         } 
                     });
 
-    const std::string url = "ws://" + m_signaling_ip + ":" + std::to_string(m_signaling_port) + "/" + localId;
-
-    m_ws->open(url);
+    m_signaling_url = "ws://" + m_signaling_ip + ":" + std::to_string(m_signaling_port) + "/" + localId;
+    std::cout << "[signaling] opening websocket url=" << m_signaling_url << std::endl;
+    try {
+        m_ws->open(m_signaling_url);
+    } catch (const std::exception& e) {
+        std::cerr << "[signaling] m_ws->open exception: " << e.what() << std::endl;
+        return;
+    } catch (...) {
+        std::cerr << "[signaling] m_ws->open exception: unknown error" << std::endl;
+        return;
+    }
 
     LOGINFO("Waiting for signaling to be connected...");
     while (!m_ws->isOpen()) {
