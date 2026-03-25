@@ -194,10 +194,10 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     RECT wr{};
     if (!GetWindowRect(hwnd, &wr)) return {};
     RECT clipped = wr;
-    clipped.left = std::max(clipped.left, m_output_rect.left);
-    clipped.top = std::max(clipped.top, m_output_rect.top);
-    clipped.right = std::min(clipped.right, m_output_rect.right);
-    clipped.bottom = std::min(clipped.bottom, m_output_rect.bottom);
+    clipped.left = (std::max)(clipped.left, m_output_rect.left);
+    clipped.top = (std::max)(clipped.top, m_output_rect.top);
+    clipped.right = (std::min)(clipped.right, m_output_rect.right);
+    clipped.bottom = (std::min)(clipped.bottom, m_output_rect.bottom);
     int w = clipped.right - clipped.left;
     int h = clipped.bottom - clipped.top;
     if (w <= 1 || h <= 1) return {};

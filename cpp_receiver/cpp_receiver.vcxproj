@@ -22,25 +22,19 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(IncludePath)</IncludePath>
-    <!-- Debug CRT 不一定存在时，优先用 Release 版第三方库以避免运行库不匹配 -->
-    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Release;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\atlmfc\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\VS\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\um\x64;C:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;D:\code\orient\remote_process_control\remote_process_control;$(IncludePath)</IncludePath>
+    <!-- 与 remote_process_control Debug|x64 一致：/MDd + libdatachannel build\Debug（勿与 Release 版 datachannel.dll 混用） -->
+    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Debug;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\atlmfc\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\VS\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\um\x64;C:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;D:\code\orient\remote_process_control\remote_process_control;$(IncludePath)</IncludePath>
     <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <!--
-      如果机器缺少 Debug CRT（如 msvcprtd.lib），Debug 配置会直接 LNK1104 失败。
-      这里先改为使用 Release CRT，以保证能完成编译/联调。
-    -->
-    <UseDebugLibraries>false</UseDebugLibraries>
-    <!-- 直接覆盖 Debug 配置的运行库选择，避免 /MDd -> msvcprtd.lib -->
-    <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
-    <CharacterSet>NotSet</CharacterSet>
+    <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -63,19 +57,17 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <!-- 关键：去掉 _DEBUG，避免头文件自动拉取 msvcprtd.lib -->
-      <!-- 不继承默认 Debug 的 %(PreprocessorDefinitions)，避免自动带入 _DEBUG -->
-      <PreprocessorDefinitions>_CONSOLE</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <!-- 避免链接 Debug CRT（msvcprtd.lib 缺失会导致 LNK1104） -->
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <!-- 默认 Debug 为 /MDd，与 remote_process_control 一致；勿再设为 MultiThreadedDLL -->
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>ws2_32.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;datachannel.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;user32.lib;gdi32.lib;msvcprt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- 不要显式写 msvcprt.lib，否则会固定链到 Release 版 CRT，与 /MDd 冲突 -->
+      <AdditionalDependencies>ws2_32.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;datachannel.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

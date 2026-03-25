@@ -1,6 +1,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 
 // Some toolchains may not expose GET_X_LPARAM/GET_Y_LPARAM as macros.
@@ -22,11 +27,16 @@
 #include <ctime>
 #include <mutex>
 #include <optional>
+#include <cstdarg>
 #include <stdexcept>
+#include <random>
 #include <string>
+#include <queue>
+#include <condition_variable>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 #include <rtc/rtc.hpp>
 #include <rtc/h264rtpdepacketizer.hpp>
@@ -46,13 +56,61 @@ extern "C" {
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 using Microsoft::WRL::ComPtr;
 using json = nlohmann::json;
 
+static HANDLE g_logFile = INVALID_HANDLE_VALUE;
+static CRITICAL_SECTION g_logCs;
+static std::atomic<bool> g_logReady{false};
+
+static void Logf(const char* fmt, ...) {
+	if (!g_logReady.load(std::memory_order_relaxed)) return;
+	char buf[2048];
+	va_list args;
+	va_start(args, fmt);
+#if defined(_MSC_VER)
+	_vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, args);
+#else
+	std::vsnprintf(buf, sizeof(buf), fmt, args);
+#endif
+	va_end(args);
+	if (buf[0] == '\0') return;
+	EnterCriticalSection(&g_logCs);
+	DWORD written = 0;
+	(void)WriteFile(g_logFile, buf, (DWORD)std::strlen(buf), &written, nullptr);
+	LeaveCriticalSection(&g_logCs);
+}
+
+static LONG WINAPI UnhandledExceptionLogger(EXCEPTION_POINTERS* ep) {
+	// Best-effort log for access violations / crashes.
+	// This runs when C++ exceptions aren't available.
+	DWORD code = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0;
+	void* addr = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+	Logf("[receiver] unhandled exception code=0x%08lX addr=%p\n", (unsigned long)code, addr);
+	return EXCEPTION_EXECUTE_HANDLER; // let the process terminate after logging
+}
+
+static void EnsureWinsockOnce() {
+	static std::once_flag once;
+	std::call_once(once, [] {
+		WSADATA wsa{};
+		const int r = WSAStartup(MAKEWORD(2, 2), &wsa);
+		if (r != 0) Logf("[net] WSAStartup failed: %d\n", r);
+	});
+}
+
 static std::atomic<bool> g_exitRequested{false};
 static HWND g_hwnd = nullptr;
 static std::atomic<bool> g_pingThreadStarted{false};
+
+/** Normal window with title bar: default on so F5/debug does not block the whole desktop. */
+static bool g_windowed = true;
+/** Fullscreen cover every monitor (old behavior). Default false: only primary monitor. */
+static bool g_fullscreenAllMonitors = false;
+/** Cap render/present rate to reduce CPU/GPU load (0 = unlimited, for latency experiments). */
+static int g_maxPresentFps = 60;
 
 struct SharedVideoFrame {
 	std::vector<uint8_t> bgra; // size = w*h*4
@@ -65,8 +123,20 @@ struct SharedVideoFrame {
 static std::mutex g_frameMtx;
 static SharedVideoFrame g_sharedFrame;
 
-static std::mutex g_dcMtx;
+static std::recursive_mutex g_dcMtx;
 static std::shared_ptr<rtc::DataChannel> g_dataChannel;
+// libdatachannel 里 Track 对象的生命周期不保证跨回调持续。
+// 为了确保 onFrame 能持续收到数据，需要在 receiver 端保留一份 shared_ptr 引用。
+
+
+static std::shared_ptr<rtc::Track> g_videoTrackKeepAlive;
+
+// Outgoing websocket messages are also queued to avoid calling ws->send
+// directly from inside libdatachannel callbacks.
+static std::mutex g_wsMtx;
+static std::shared_ptr<rtc::WebSocket> g_wsForRequest;
+static std::mutex g_wsSendPendingMtx;
+static std::queue<std::string> g_wsSendPending;
 
 static std::atomic<bool> g_controlEnabled{false};
 static std::atomic<bool> g_inputArmed{false};
@@ -112,15 +182,39 @@ static double SmoothEwma(std::optional<double>& prev, double sample, double alph
 
 static std::string RandomId(size_t length) {
 	const char* chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+	static thread_local std::mt19937_64 rng(std::random_device{}());
+	std::uniform_int_distribution<size_t> dist(0, std::strlen(chars) - 1);
 	std::string out;
 	out.resize(length);
-	for (size_t i = 0; i < length; ++i) out[i] = chars[rand() % 61];
+	for (size_t i = 0; i < length; ++i) out[i] = chars[dist(rng)];
 	return out;
 }
 
 static uint64_t SystemMsNow() {
 	using namespace std::chrono;
 	return (uint64_t)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+static void InitLogFile(const std::string& clientId) {
+	// Log file write via WinAPI to avoid depending on CRT stdout/stderr state.
+	const std::string logPath =
+		"cpp_receiver_" + clientId + "_" + std::to_string((unsigned long long)GetCurrentProcessId()) + ".log";
+
+	// clientId is ascii-ish (digits/letters), so CreateFileA is safe here.
+	g_logFile = CreateFileA(
+		logPath.c_str(),
+		FILE_APPEND_DATA,
+		FILE_SHARE_READ | FILE_SHARE_WRITE,
+		nullptr,
+		OPEN_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL,
+		nullptr);
+	if (g_logFile == INVALID_HANDLE_VALUE) return;
+
+	InitializeCriticalSection(&g_logCs);
+	g_logReady.store(true, std::memory_order_release);
+
+	Logf("[log] started clientId=%s pid=%llu\n", clientId.c_str(), (unsigned long long)GetCurrentProcessId());
 }
 
 class H264AnnexBDecoderToBGRA {
@@ -156,7 +250,7 @@ public:
 
 		int ret = avcodec_send_packet(m_ctx, m_packet);
 		if (ret < 0) {
-			std::fprintf(stderr, "[decoder] avcodec_send_packet failed ret=%d\n", ret);
+		Logf("[decoder] avcodec_send_packet failed ret=%d\n", ret);
 			return false;
 		}
 
@@ -191,7 +285,14 @@ public:
 
 private:
 	void ensureSws(int outW, int outH, AVPixelFormat srcFmt) {
-		if (m_sws && outW == m_outW && outH == m_outH && srcFmt == m_srcFmt) return;
+		// Even when sws context is unchanged, m_bgraTmp might have been swapped out
+		// into the shared frame buffer, leaving it empty or wrong-sized.
+		// Ensure the backing storage size always matches outW*outH*4 before sws_scale.
+		if (m_sws && outW == m_outW && outH == m_outH && srcFmt == m_srcFmt) {
+			const size_t need = (size_t)outW * (size_t)outH * 4;
+			if (m_bgraTmp.size() != need) m_bgraTmp.resize(need);
+			return;
+		}
 
 		if (m_sws) sws_freeContext(m_sws);
 		m_sws = sws_getContext(outW, outH, srcFmt,
@@ -259,7 +360,7 @@ static uint64_t QpcToSysMs(uint64_t qpc) {
 static bool SendToDataChannel(const std::string& s) {
 	std::shared_ptr<rtc::DataChannel> dc;
 	{
-		std::lock_guard<std::mutex> lk(g_dcMtx);
+		std::lock_guard<std::recursive_mutex> lk(g_dcMtx);
 		dc = g_dataChannel;
 	}
 	if (!dc || !dc->isOpen()) return false;
@@ -267,6 +368,80 @@ static bool SendToDataChannel(const std::string& s) {
 		return dc->send(s);
 	} catch (...) {
 		return false;
+	}
+}
+
+// Push outgoing messages from callbacks into a queue,
+// then drain them on the main/render thread to avoid re-entrancy.
+// Use recursive_mutex to avoid "resource deadlock would occur" when callbacks
+// are re-entered on the same thread by libdatachannel internals.
+static std::recursive_mutex g_dcSendPendingMtx;
+static std::queue<std::string> g_dcSendPending;
+
+static void SendToDataChannelAsync(std::string s) {
+	std::lock_guard<std::recursive_mutex> lk(g_dcSendPendingMtx);
+	g_dcSendPending.push(std::move(s));
+}
+
+static void DrainDcSendPending() {
+	std::queue<std::string> local;
+	{
+		std::lock_guard<std::recursive_mutex> lk(g_dcSendPendingMtx);
+		std::swap(local, g_dcSendPending);
+	}
+	while (!local.empty()) {
+		SendToDataChannel(local.front());
+		local.pop();
+	}
+}
+
+static void DrainWsSendPending() {
+	std::queue<std::string> local;
+	{
+		std::lock_guard<std::mutex> lk(g_wsSendPendingMtx);
+		std::swap(local, g_wsSendPending);
+	}
+	if (local.empty()) return;
+
+	std::shared_ptr<rtc::WebSocket> ws;
+	{
+		std::lock_guard<std::mutex> lk(g_wsMtx);
+		ws = g_wsForRequest;
+	}
+	if (!ws || !ws->isOpen()) return;
+
+	static std::atomic<int> wsSendLogCount{0};
+	const size_t cnt = local.size();
+	if (wsSendLogCount.load(std::memory_order_relaxed) < 5) {
+		Logf("[signaling] DrainWsSendPending begin cnt=%llu\n", (unsigned long long)cnt);
+	}
+
+	while (!local.empty()) {
+		try {
+			if (wsSendLogCount.load(std::memory_order_relaxed) < 5) {
+				// log only for first few messages to avoid huge logs
+				Logf("[signaling] DrainWsSendPending sending one\n");
+				wsSendLogCount.fetch_add(1, std::memory_order_relaxed);
+			}
+			const std::string& payload = local.front();
+			static std::atomic<int> wsPayloadLogCnt{0};
+			const int plc = wsPayloadLogCnt.fetch_add(1, std::memory_order_relaxed);
+			if (plc < 5) {
+				const size_t n = (payload.size() < 160) ? payload.size() : 160;
+				Logf("[signaling] ws payload head(%llu)=%.*s\n",
+					(unsigned long long)payload.size(), (int)n, payload.c_str());
+			}
+			const bool ok = ws->send(payload);
+			static std::atomic<int> wsSendOkCnt{0};
+			const int k = wsSendOkCnt.fetch_add(1, std::memory_order_relaxed);
+			if (k < 5) {
+				Logf("[signaling] DrainWsSendPending ws->send ok=%d bytes=%llu\n",
+					(int)ok, (unsigned long long)payload.size());
+			}
+		} catch (...) {
+			Logf("[signaling] DrainWsSendPending ws->send failed (caught exception)\n");
+		}
+		local.pop();
 	}
 }
 
@@ -424,7 +599,7 @@ static void EnsureD3D(HWND hwnd) {
 			src, std::strlen(src), nullptr, nullptr, nullptr,
 			entry, profile, compileFlags, 0, &outBlob, &errBlob);
 		if (FAILED(hr2)) {
-			if (errBlob) std::fprintf(stderr, "[d3d] shader compile error: %s\n", (const char*)errBlob->GetBufferPointer());
+			if (errBlob) Logf("[d3d] shader compile error: %s\n", (const char*)errBlob->GetBufferPointer());
 			throw std::runtime_error("D3DCompile failed");
 		}
 	};
@@ -497,6 +672,53 @@ static void EnsureD3D(HWND hwnd) {
 	vp.MinDepth = 0.f;
 	vp.MaxDepth = 1.f;
 	g_d3d.context->RSSetViewports(1, &vp);
+}
+
+static void ResizeD3D(HWND hwnd) {
+	if (!g_d3d.swapChain || !g_d3d.device || !g_d3d.context) return;
+
+	RECT rc{};
+	if (!GetClientRect(hwnd, &rc)) return;
+	int w = rc.right - rc.left;
+	int h = rc.bottom - rc.top;
+	if (w <= 0 || h <= 0) return;
+	if (w == g_clientW && h == g_clientH) return;
+
+	g_d3d.context->OMSetRenderTargets(0, nullptr, nullptr);
+	g_d3d.rtv.Reset();
+
+	HRESULT hr = g_d3d.swapChain->ResizeBuffers(0, (UINT)w, (UINT)h, DXGI_FORMAT_UNKNOWN, 0);
+	if (FAILED(hr)) {
+		Logf("[d3d] ResizeBuffers failed: 0x%08X\n", (unsigned)hr);
+		return;
+	}
+
+	ComPtr<ID3D11Texture2D> backBuffer;
+	hr = g_d3d.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
+	if (FAILED(hr)) {
+		Logf("[d3d] GetBuffer after resize failed: 0x%08X\n", (unsigned)hr);
+		return;
+	}
+
+	hr = g_d3d.device->CreateRenderTargetView(backBuffer.Get(), nullptr, &g_d3d.rtv);
+	if (FAILED(hr)) {
+		Logf("[d3d] CreateRenderTargetView after resize failed: 0x%08X\n", (unsigned)hr);
+		return;
+	}
+
+	g_clientW = w;
+	g_clientH = h;
+
+	D3D11_VIEWPORT vp{};
+	vp.TopLeftX = 0.f;
+	vp.TopLeftY = 0.f;
+	vp.Width = (FLOAT)g_clientW;
+	vp.Height = (FLOAT)g_clientH;
+	vp.MinDepth = 0.f;
+	vp.MaxDepth = 1.f;
+	g_d3d.context->RSSetViewports(1, &vp);
+
+	UpdateLetterboxRect();
 }
 
 static void EnsureTextureIfNeeded(int w, int h) {
@@ -597,7 +819,7 @@ static void StartLatencyPingThread() {
 		while (!g_exitRequested.load(std::memory_order_relaxed)) {
 			std::shared_ptr<rtc::DataChannel> dc;
 			{
-				std::lock_guard<std::mutex> lk(g_dcMtx);
+				std::lock_guard<std::recursive_mutex> lk(g_dcMtx);
 				dc = g_dataChannel;
 			}
 			if (!dc || !dc->isOpen()) {
@@ -608,10 +830,8 @@ static void StartLatencyPingThread() {
 			const uint64_t tCli = SystemMsNow();
 			pingSeq++;
 			json j = { {"type", "latPing"}, {"seq", pingSeq}, {"tCli", (int64_t)tCli} };
-			try {
-				dc->send(j.dump());
-			} catch (...) {
-			}
+			// Queue send to avoid any possible re-entrancy/deadlock inside libdatachannel.
+			SendToDataChannelAsync(j.dump());
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 		}
@@ -623,8 +843,18 @@ static void HandleDataChannelMessage(const std::string& msg) {
 	// Expected JSON messages from server: frameMark / latPong / controlGranted etc.
 	// Also handle Ping from server for compatibility with existing ping-pong logic.
 	if (msg.find("Ping") != std::string::npos) {
-		const uint64_t t = SystemMsNow();
-		SendToDataChannel("Pong " + std::to_string(t));
+		// Avoid being spammed: only reply to Ping every 10 seconds.
+		// This keeps logs readable and prevents Ping/Pong loops from flooding.
+		static std::atomic<uint64_t> lastPongMs{0};
+		const uint64_t now = SystemMsNow();
+		uint64_t expected = lastPongMs.load(std::memory_order_relaxed);
+		if (expected == 0 || (now >= expected + 10000)) {
+			if (lastPongMs.compare_exchange_strong(
+				expected, now,
+				std::memory_order_relaxed, std::memory_order_relaxed)) {
+				SendToDataChannelAsync("Pong " + std::to_string(now));
+			}
+		}
 		return;
 	}
 
@@ -673,6 +903,7 @@ static void HandleDataChannelMessage(const std::string& msg) {
 	}
 
 	if (type == "remoteProcessExited") {
+		Logf("[receiver] remoteProcessExited received\n");
 		g_exitRequested.store(true, std::memory_order_relaxed);
 		g_inputArmed.store(false, std::memory_order_relaxed);
 		if (g_hwnd) PostMessage(g_hwnd, WM_CLOSE, 0, 0);
@@ -683,7 +914,7 @@ static void HandleDataChannelMessage(const std::string& msg) {
 static void SetupDataChannelCallbacks(const std::shared_ptr<rtc::PeerConnection>& pc) {
 	pc->onDataChannel([](std::shared_ptr<rtc::DataChannel> dc) {
 		{
-			std::lock_guard<std::mutex> lk(g_dcMtx);
+			std::lock_guard<std::recursive_mutex> lk(g_dcMtx);
 			g_dataChannel = dc;
 		}
 
@@ -693,7 +924,7 @@ static void SetupDataChannelCallbacks(const std::shared_ptr<rtc::PeerConnection>
 
 			// Request control (server will grant/deny based on controller limiter).
 			json req = { {"type", "controlRequest"} };
-			try { dc->send(req.dump()); } catch (...) {}
+			SendToDataChannelAsync(req.dump());
 
 			StartLatencyPingThread();
 		});
@@ -705,8 +936,9 @@ static void SetupDataChannelCallbacks(const std::shared_ptr<rtc::PeerConnection>
 		dc->onClosed([] {
 			g_controlEnabled.store(false, std::memory_order_relaxed);
 			g_videoTrackAttached.store(false, std::memory_order_relaxed);
-			std::lock_guard<std::mutex> lk(g_dcMtx);
+			std::lock_guard<std::recursive_mutex> lk(g_dcMtx);
 			g_dataChannel.reset();
+			g_videoTrackKeepAlive.reset();
 		});
 	});
 }
@@ -721,34 +953,216 @@ static std::shared_ptr<rtc::PeerConnection> SetupPeerConnectionForAnswerer(
 	config.iceServers.emplace_back("stun:stun.l.google.com:19302");
 
 	auto pc = std::make_shared<rtc::PeerConnection>(config);
+	std::weak_ptr<rtc::PeerConnection> wpc = pc;
 
-	pc->onGatheringStateChange([&](rtc::PeerConnection::GatheringState st) {
+	pc->onGatheringStateChange([wpc, &offerHandled](rtc::PeerConnection::GatheringState st) {
 		if (st != rtc::PeerConnection::GatheringState::Complete) return;
-		if (offerHandled.load(std::memory_order_relaxed)) return; // send answer once
-		auto ldOpt = pc->localDescription();
-		if (!ldOpt.has_value()) return;
-		const rtc::Description ld = ldOpt.value();
-		const std::string sdp = std::string(ld); // Description has operator string()
-		json ans = { {"id", "server"}, {"type", ld.typeString()}, {"sdp", sdp} };
-		try {
-			ws->send(ans.dump());
-		} catch (...) {
+		Logf("[signaling] gathering complete\n");
+		if (offerHandled.load(std::memory_order_relaxed)) return; // send once
+		auto pc2 = wpc.lock();
+		if (!pc2) {
+			Logf("[signaling] gathering complete but pc expired\n");
+			return;
 		}
-		offerHandled.store(true, std::memory_order_relaxed);
+		auto ldOpt = pc2->localDescription();
+		if (!ldOpt.has_value()) {
+			Logf("[signaling] gathering complete but no localDescription\n");
+			return;
+		}
+		const rtc::Description ld = ldOpt.value();
+		{
+			// Diagnostics: check if SDP contains a non-zero m=video port.
+			int vport = -1;
+			const std::string sdpTmp = std::string(ld);
+			auto pos = sdpTmp.find("m=video ");
+			if (pos != std::string::npos) {
+				size_t i = pos + std::strlen("m=video ");
+				while (i < sdpTmp.size() && (sdpTmp[i] < '0' || sdpTmp[i] > '9')) ++i;
+				if (i < sdpTmp.size()) {
+					size_t j = i;
+					while (j < sdpTmp.size() && (sdpTmp[j] >= '0' && sdpTmp[j] <= '9')) ++j;
+					if (j > i) vport = std::atoi(sdpTmp.substr(i, j - i).c_str());
+				}
+			}
+			Logf("[signaling] gathering complete localDescription ended=%d m=video port=%d\n",
+				(int)ld.ended(), vport);
+		}
+		std::string sdp = std::string(ld); // include candidates (non-trickle signaling)
+		// Diagnose candidate count (helps verify ICE is present in SDP).
+		size_t candCnt = 0;
+		for (size_t p = sdp.find("a=candidate:"); p != std::string::npos; p = sdp.find("a=candidate:", p + 1)) {
+			++candCnt;
+		}
+		// libdatachannel may output `m=<media> 0` in the gathered localDescription.
+		// Some interop paths treat port=0 as "disabled", preventing RTP setup.
+		// Use dummy port 9 (common WebRTC convention) for recv-only tracks.
+		auto FixRecvOnlyMLinePort = [&](const char* media) {
+			const std::string from = std::string("m=") + media + " 0 ";
+			const std::string to = std::string("m=") + media + " 9 ";
+			size_t pos = 0;
+			bool changed = false;
+			while ((pos = sdp.find(from, pos)) != std::string::npos) {
+				sdp.replace(pos, from.size(), to);
+				pos += to.size();
+				changed = true;
+			}
+			return changed;
+		};
+
+		const bool chV = FixRecvOnlyMLinePort("video");
+		const bool chA = FixRecvOnlyMLinePort("audio");
+		if (chV) Logf("[signaling] fixed SDP m=video 0 -> 9 (candidates=%llu)\n",
+			(unsigned long long)candCnt);
+		if (chA) Logf("[signaling] fixed SDP m=audio 0 -> 9 (candidates=%llu)\n",
+			(unsigned long long)candCnt);
+		if (!chV && !chA) {
+			Logf("[signaling] SDP m-line ports already non-zero (candidates=%llu)\n",
+				(unsigned long long)candCnt);
+		}
+
+		Logf("[signaling] sending SDP (candidates=%llu)\n",
+			(unsigned long long)candCnt);
+
+		// Always send `type=answer` for receiver -> offerer signaling.
+		json ans = { {"id", "server"}, {"type", "answer"}, {"sdp", sdp} };
+		try {
+			const std::string payload = ans.dump();
+			{
+				std::lock_guard<std::mutex> lk(g_wsSendPendingMtx);
+				g_wsSendPending.push(payload);
+			}
+			Logf("[signaling] queued answer payload (gathering complete) bytes=%llu\n",
+				(unsigned long long)payload.size());
+			offerHandled.store(true, std::memory_order_relaxed);
+		} catch (...) {
+			Logf("[signaling] queue answer payload failed\n");
+		}
+	});
+
+	pc->onLocalDescription([&](rtc::Description ld) {
+		// Diagnostics only: sending is done when gathering completes, because
+		// libdatachannel may call onLocalDescription before candidates are ended,
+		// and may not call it again when ended becomes true.
+		static std::atomic<int> ldCnt{0};
+		const int c = ldCnt.fetch_add(1, std::memory_order_relaxed);
+		if (c < 5) {
+			Logf("[signaling] onLocalDescription type=%s ended=%d\n",
+				ld.typeString().c_str(), (int)ld.ended());
+		}
 	});
 
 	pc->onTrack([&](std::shared_ptr<rtc::Track> track) {
 		if (!track) return;
+		const std::string mid = track->mid();
+		const std::string mediaType = track->description().type();
+		Logf("[receiver] onTrack mid=%s mediaType=%s\n", mid.c_str(), mediaType.c_str());
+		// Only attach H264 depacketizer for video track.
+		if (mediaType != "video") {
+			Logf("[receiver] onTrack ignored (not video)\n");
+			return;
+		}
 		if (g_videoTrackAttached.exchange(true, std::memory_order_acq_rel)) return;
+		Logf("[receiver] onVideoTrack attached\n");
+
+		// Keep the track object alive; otherwise libdatachannel may destroy it
+		// right after onTrack callback, preventing onFrame from firing.
+		g_videoTrackKeepAlive = track;
 
 		auto depacketizer = std::make_shared<rtc::H264RtpDepacketizer>(
+			// Output AnnexB with 0x00000001 start codes (valid for FFmpeg AnnexB decoder).
 			rtc::H264RtpDepacketizer::Separator::LongStartSequence);
-		track->setMediaHandler(depacketizer);
+		try {
+			track->setMediaHandler(depacketizer);
+		} catch (const std::exception& e) {
+			Logf("[receiver] setMediaHandler failed: %s\n", e.what());
+			return;
+		} catch (...) {
+			Logf("[receiver] setMediaHandler failed: unknown\n");
+			return;
+		}
 
 		track->onFrame([&decoder](rtc::binary data, rtc::FrameInfo /*info*/) {
-			if (data.empty()) return;
+			static std::atomic<uint64_t> frameCbCnt{0};
+			static std::atomic<uint64_t> emptyCbCnt{0};
+
+			const uint64_t cbn = frameCbCnt.fetch_add(1, std::memory_order_relaxed);
+			const bool isEmpty = data.empty();
+
+			if (isEmpty) {
+				const uint64_t en = emptyCbCnt.fetch_add(1, std::memory_order_relaxed);
+				if (en < 5) {
+					Logf("[receiver] onFrame callback but data EMPTY (cbn=%llu)\n", (unsigned long long)cbn);
+				}
+				return;
+			}
+
+			if (cbn < 5) {
+				Logf("[receiver] onFrame got rtc::binary size=%llu\n", (unsigned long long)data.size());
+				// Dump a small prefix to help validate whether this looks like AnnexB.
+				const uint8_t* p = reinterpret_cast<const uint8_t*>(data.data());
+				char hexbuf[80]{};
+				const size_t dumpN = (data.size() < 16) ? data.size() : 16;
+				for (size_t i = 0; i < dumpN && (i * 3 + 2) < sizeof(hexbuf); ++i) {
+					// Each byte: "XX "
+					std::snprintf(hexbuf + i * 3, 4, "%02X ", p[i]);
+				}
+				Logf("[receiver] onFrame prefix=%s\n", hexbuf);
+			}
+
 			const uint8_t* p = reinterpret_cast<const uint8_t*>(data.data());
-			decoder.decodeAnnexB(p, data.size());
+			const size_t n = data.size();
+
+			auto looksLikeAnnexB = [&]() -> bool {
+				if (n >= 4 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) return true; // 00 00 00 01
+				if (n >= 3 && p[0] == 0 && p[1] == 0 && p[2] == 1) return true; // 00 00 01
+				return false;
+			};
+
+			try {
+				bool decoded = decoder.decodeAnnexB(p, n);
+				if (!decoded && !looksLikeAnnexB()) {
+					// Try length-prefixed NALUs: [uint32_be len][nalu bytes]...
+					// Convert to AnnexB start codes and decode again.
+					std::vector<uint8_t> annexb;
+					annexb.reserve(n + (n / 4) * 4);
+					size_t off = 0;
+					bool ok = true;
+					while (off + 4 <= n) {
+						const uint32_t len =
+							(uint32_t(p[off + 0]) << 24) |
+							(uint32_t(p[off + 1]) << 16) |
+							(uint32_t(p[off + 2]) << 8) |
+							(uint32_t(p[off + 3]) << 0);
+						off += 4;
+						if (len == 0 || off + size_t(len) > n) { ok = false; break; }
+						// AnnexB 4-byte start code
+						annexb.insert(annexb.end(), { 0x00, 0x00, 0x00, 0x01 });
+						annexb.insert(annexb.end(), p + off, p + off + len);
+						off += size_t(len);
+					}
+					if (ok && !annexb.empty()) {
+						decoded = decoder.decodeAnnexB(annexb.data(), annexb.size());
+						if (decoded && cbn < 5) {
+							Logf("[receiver] decodeAnnexB failed; length->AnnexB decode ok\n");
+						}
+					}
+				}
+
+				if (decoded) {
+					static std::atomic<uint64_t> lastLogMs{0};
+					const uint64_t now = SystemMsNow();
+					uint64_t prev = lastLogMs.load(std::memory_order_relaxed);
+					if (now - prev > 1000) {
+						if (lastLogMs.compare_exchange_strong(prev, now, std::memory_order_relaxed)) {
+							Logf("[receiver] decodeAnnexB ok (throttled)\n");
+						}
+					}
+				}
+			} catch (const std::exception& e) {
+				if (cbn < 5) Logf("[receiver] decode exception: %s\n", e.what());
+			} catch (...) {
+				if (cbn < 5) Logf("[receiver] decode exception: unknown\n");
+			}
 		});
 	});
 
@@ -769,76 +1183,166 @@ static void RunSignalingAndWebRtc(
 	const std::string& clientId,
 	const std::string& exePath
 ) {
-	auto ws = std::make_shared<rtc::WebSocket>();
-	H264AnnexBDecoderToBGRA decoder;
-	std::atomic<bool> offerHandled{false};
+	EnsureWinsockOnce();
 
-	ws->onOpen([&ws, &exePath] {
-		SendRequestOnWebSocketOpen(ws, exePath);
+	auto ws = std::make_shared<rtc::WebSocket>();
+	std::atomic<bool> offerHandled{false};
+	std::atomic<bool> wsOpened{false};
+	std::atomic<bool> requestSent{false};
+
+	// Copy for async callbacks (avoid dangling refs if stack/layout changes).
+	const std::string exePathLocal = exePath;
+
+	const std::string requestPayload = [exePathLocal] {
+		json req = { {"id", "server"}, {"type", "request"} };
+		if (!exePathLocal.empty()) req["exePath"] = exePathLocal;
+		return req.dump();
+	}();
+
+	ws->onOpen([ws, exePathLocal, &wsOpened] {
+		Logf("[signaling] ws onOpen fired\n");
+		wsOpened.store(true, std::memory_order_relaxed);
+	});
+
+	ws->onError([](const std::string& err) {
+		Logf("[signaling] WebSocket error: %s\n", err.c_str());
+	});
+	ws->onClosed([] {
+		Logf("[signaling] WebSocket closed\n");
 	});
 
 	std::mutex pcMtx;
 	std::shared_ptr<rtc::PeerConnection> pc;
+	// FFmpeg/libav init can interact badly with some Winsock/libdatachannel init orders on Windows;
+	// create decoder only when we actually need it (first offer), after ws->open.
+	std::shared_ptr<H264AnnexBDecoderToBGRA> decoder;
 
 	ws->onMessage([&](const std::variant<rtc::binary, std::string>& data) {
 		if (std::holds_alternative<std::string>(data)) {
 			const std::string& str = std::get<std::string>(data);
 			json msg;
 			try { msg = json::parse(str); }
-			catch (...) { return; }
+			catch (...) {
+				static std::atomic<int> parseFailCnt{0};
+				int c = parseFailCnt.fetch_add(1, std::memory_order_relaxed);
+				if (c < 5) Logf("[signaling] onMessage JSON parse failed\n");
+				return;
+			}
 
 			const std::string type = msg.value("type", "");
+			static std::atomic<int> recvMsgCnt{0};
+			int rc = recvMsgCnt.fetch_add(1, std::memory_order_relaxed);
+			if (rc < 20) Logf("[signaling] onMessage type=%s\n", type.c_str());
 			if (type == "offer") {
 				const std::string sdp = msg.value("sdp", "");
 
 				// Only handle first offer.
 				std::lock_guard<std::mutex> lk(pcMtx);
 				if (!pc) {
-					// Need pc created before setRemoteDescription.
-					pc = SetupPeerConnectionForAnswerer(ws, offerHandled, decoder);
+					if (!decoder) {
+						try {
+							decoder = std::make_shared<H264AnnexBDecoderToBGRA>();
+						} catch (const std::exception& e) {
+							Logf("[decoder] FFmpeg init failed: %s\n", e.what());
+							return;
+						}
+					}
+					pc = SetupPeerConnectionForAnswerer(ws, offerHandled, *decoder);
 
-					// Register track/data handlers before remote description is set.
-					// Then set remote offer and generate local answer.
 					rtc::Description offer(sdp, type);
-					if (pc) { // <--- Add this check
+					if (pc) {
 						pc->setRemoteDescription(offer);
 						pc->setLocalDescription(rtc::Description::Type::Answer);
+						// Ensure candidates are gathered so SDP answer contains media ports.
+						pc->gatherLocalCandidates();
 					}
-				}
-				else {
-					// If received again, ignore in phase1.
 				}
 			}
 		}
 		});
 
-
-	// 信令服务端（Qt signaling relay）要求路径携带本地连接 id：/clientId
+	// Signaling relay server requires local connection id in path: /clientId
+	
 	const std::string url = "ws://" + host + ":" + std::to_string(port) + "/" + clientId;
 	std::printf("[signaling] ws url: %s\n", url.c_str());
 	try {
 		ws->open(url);
 	} catch (const std::exception& e) {
-		std::fprintf(stderr, "[signaling] ws->open failed: %s\n", e.what());
+		Logf("[signaling] ws->open failed: %s\n", e.what());
 		throw;
 	} catch (...) {
-		std::fprintf(stderr, "[signaling] ws->open failed: unknown exception\n");
+		Logf("[signaling] ws->open failed: unknown exception\n");
 		throw;
 	}
 
+	// Make ws available for queued sends (answer payload, etc.)
+	{
+		std::lock_guard<std::mutex> lk(g_wsMtx);
+		g_wsForRequest = ws;
+	}
+
 	// Wait until exit requested or websocket closed.
-	while (!g_exitRequested.load(std::memory_order_relaxed) && ws && ws->isOpen()) {
+	Logf("[signaling] ws->open returned, isOpen=%d isClosed=%d\n",
+		ws ? (int)ws->isOpen() : 0,
+		ws ? (int)ws->isClosed() : 1);
+
+	static std::atomic<int> loopLogCnt{0};
+	while (!g_exitRequested.load(std::memory_order_relaxed) && ws && !ws->isClosed()) {
+		const int lc = loopLogCnt.fetch_add(1, std::memory_order_relaxed);
+		if (lc < 5) {
+			Logf("[signaling] loop iter=%d wsOpened=%d requestSent=%d isOpen=%d\n",
+				lc,
+				(int)wsOpened.load(std::memory_order_relaxed),
+				(int)requestSent.load(std::memory_order_relaxed),
+				(int)ws->isOpen());
+		}
+		// Now that onOpen has fired, send request once from the signaling thread.
+		if (wsOpened.load(std::memory_order_relaxed) && !requestSent.load(std::memory_order_relaxed)) {
+			try {
+				Logf("[signaling] sending request from signaling thread\n");
+				ws->send(requestPayload);
+				requestSent.store(true, std::memory_order_relaxed);
+				Logf("[signaling] request sent ok\n");
+			} catch (const std::exception& e) {
+				Logf("[signaling] ws->send request failed: %s\n", e.what());
+				requestSent.store(true, std::memory_order_relaxed); // avoid retry storm
+			} catch (...) {
+				Logf("[signaling] ws->send request failed: unknown\n");
+				requestSent.store(true, std::memory_order_relaxed);
+			}
+		}
+
+		DrainWsSendPending();
 		std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	}
 }
 
-static void EnsureWindowSizeForFullscreen(HWND hwnd) {
+static void ApplyFullscreenAllMonitors(HWND hwnd) {
 	const int sx = GetSystemMetrics(SM_XVIRTUALSCREEN);
 	const int sy = GetSystemMetrics(SM_YVIRTUALSCREEN);
 	const int sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
 	const int sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 	SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+	// One-time Z-order bump; avoid repeatedly stealing focus every frame.
 	SetWindowPos(hwnd, HWND_TOP, sx, sy, sw, sh, SWP_SHOWWINDOW);
+}
+
+static void ApplyFullscreenPrimary(HWND hwnd) {
+	MONITORINFOEXW mi{};
+	mi.cbSize = sizeof(mi);
+	HMONITOR hMon = MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
+	if (!hMon || !GetMonitorInfoW(hMon, &mi)) {
+		const int sw = GetSystemMetrics(SM_CXSCREEN);
+		const int sh = GetSystemMetrics(SM_CYSCREEN);
+		SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+		SetWindowPos(hwnd, HWND_TOP, 0, 0, sw, sh, SWP_SHOWWINDOW);
+		return;
+	}
+	const RECT& r = mi.rcMonitor;
+	const int w = r.right - r.left;
+	const int h = r.bottom - r.top;
+	SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+	SetWindowPos(hwnd, HWND_TOP, r.left, r.top, w, h, SWP_SHOWWINDOW);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -874,7 +1378,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 			{"altKey", altKey},
 			{"metaKey", metaKey},
 		};
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 	case WM_KEYUP: {
@@ -899,7 +1403,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 			{"altKey", altKey},
 			{"metaKey", metaKey},
 		};
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 
@@ -933,7 +1437,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 			{"videoWidth", vw},
 			{"videoHeight", vh},
 		};
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 	case WM_LBUTTONDOWN: {
@@ -960,10 +1464,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 			{"videoWidth", vw},
 			{"videoHeight", vh},
 		};
-		SendToDataChannel(mv.dump());
+		SendToDataChannelAsync(mv.dump());
 
 		json j = { {"type", "mouseDown"}, {"button", 0}, {"x", 0}, {"y", 0} };
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 	case WM_LBUTTONUP: {
@@ -987,12 +1491,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 					{"videoWidth", vw},
 					{"videoHeight", vh},
 				};
-				SendToDataChannel(mv.dump());
+				SendToDataChannelAsync(mv.dump());
 			}
 		}
 
 		json j = { {"type", "mouseUp"}, {"button", 0}, {"x", 0}, {"y", 0} };
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 	case WM_MOUSEWHEEL: {
@@ -1008,7 +1512,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		const int deltaX = 0;
 
 		json j = { {"type", "mouseWheel"}, {"deltaX", deltaX}, {"deltaY", deltaY}, {"x", 0}, {"y", 0} };
-		SendToDataChannel(j.dump());
+		SendToDataChannelAsync(j.dump());
 		return 0;
 	}
 	case WM_KILLFOCUS:
@@ -1016,14 +1520,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		g_lastAbsX.store(-1, std::memory_order_relaxed);
 		g_lastAbsY.store(-1, std::memory_order_relaxed);
 		return 0;
+	case WM_SIZE:
+		if (wParam != SIZE_MINIMIZED)
+			ResizeD3D(hwnd);
+		return 0;
 	default:
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
 }
 
 int main(int argc, char** argv) {
-	std::srand((unsigned int)std::time(nullptr));
-
 	std::string host = "127.0.0.1";
 	int port = 9090;
 	std::string clientId;
@@ -1035,10 +1541,20 @@ int main(int argc, char** argv) {
 		else if (arg == "--port" && i + 1 < argc) port = std::atoi(argv[++i]);
 		else if (arg == "--clientId" && i + 1 < argc) clientId = argv[++i];
 		else if (arg == "--exePath" && i + 1 < argc) exePath = argv[++i];
+		else if (arg == "--windowed") g_windowed = true;
+		else if (arg == "--fullscreen") g_windowed = false;
+		else if (arg == "--allMonitors") g_fullscreenAllMonitors = true;
+		else if (arg == "--maxFps" && i + 1 < argc) g_maxPresentFps = std::atoi(argv[++i]);
 		else if (arg == "--help" || arg == "-h") {
 			std::printf(
 				"Usage:\n"
 				"  cpp_receiver.exe --host <host> [--port 9090] --exePath <path> [--clientId <id>]\n"
+				"Display / performance:\n"
+				"  (default)           Windowed mode; use taskbar / other apps normally\n"
+				"  --fullscreen        Borderless fullscreen (primary or --allMonitors)\n"
+				"  --windowed          Same as default (explicit)\n"
+				"  --allMonitors       With --fullscreen: cover all monitors\n"
+				"  --maxFps <n>        Cap present rate (default 60; 0 = unlimited)\n"
 				"Examples:\n"
 				"  cpp_receiver.exe --host 127.0.0.1 --exePath \"C:\\\\Windows\\\\System32\\\\notepad.exe\"\n"
 				"\n");
@@ -1047,8 +1563,11 @@ int main(int argc, char** argv) {
 	}
 
 	if (clientId.empty()) clientId = RandomId(10);
+	InitLogFile(clientId);
+	// Ensure access violations also get logged.
+	SetUnhandledExceptionFilter(UnhandledExceptionLogger);
+	std::printf("[receiver] clientId=%s\n", clientId.c_str());
 
-	// Create full-screen window
 	HINSTANCE hInstance = GetModuleHandle(nullptr);
 	const wchar_t* className = L"cpp_receiver_window";
 	WNDCLASSW wc{};
@@ -1058,21 +1577,63 @@ int main(int argc, char** argv) {
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	RegisterClassW(&wc);
 
-	// First create window with max virtual screen size.
-	const int sx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-	const int sy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-	const int sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-	const int sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+	if (g_windowed) {
+		RECT work{};
+		SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+		const int workW = work.right - work.left;
+		const int workH = work.bottom - work.top;
+		int wantCw = std::min(1280, (workW * 4) / 5);
+		int wantCh = std::min(720, (workH * 4) / 5);
+		wantCw = std::max(640, std::min(wantCw, workW));
+		wantCh = std::max(360, std::min(wantCh, workH));
 
-	g_hwnd = CreateWindowExW(
-		0, className, L"cpp_receiver",
-		WS_POPUP | WS_VISIBLE, sx, sy, sw, sh,
-		nullptr, nullptr, hInstance, nullptr);
+		RECT adj{ 0, 0, wantCw, wantCh };
+		AdjustWindowRectEx(&adj, WS_OVERLAPPEDWINDOW, FALSE, 0);
+		const int winW = adj.right - adj.left;
+		const int winH = adj.bottom - adj.top;
+		const int x = work.left + (workW - winW) / 2;
+		const int y = work.top + (workH - winH) / 2;
+
+		g_hwnd = CreateWindowExW(
+			0, className, L"cpp_receiver",
+			WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+			x, y, winW, winH,
+			nullptr, nullptr, hInstance, nullptr);
+	} else {
+		int sx = 0, sy = 0, sw = 0, sh = 0;
+		if (g_fullscreenAllMonitors) {
+			sx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+			sy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+			sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+			sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+		} else {
+			MONITORINFOEXW mi{};
+			mi.cbSize = sizeof(mi);
+			HMONITOR hMon = MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
+			if (hMon && GetMonitorInfoW(hMon, &mi)) {
+				const RECT& r = mi.rcMonitor;
+				sx = r.left;
+				sy = r.top;
+				sw = r.right - r.left;
+				sh = r.bottom - r.top;
+			} else {
+				sw = GetSystemMetrics(SM_CXSCREEN);
+				sh = GetSystemMetrics(SM_CYSCREEN);
+			}
+		}
+		g_hwnd = CreateWindowExW(
+			0, className, L"cpp_receiver",
+			WS_POPUP | WS_VISIBLE, sx, sy, sw, sh,
+			nullptr, nullptr, hInstance, nullptr);
+		if (g_fullscreenAllMonitors)
+			ApplyFullscreenAllMonitors(g_hwnd);
+		else
+			ApplyFullscreenPrimary(g_hwnd);
+	}
 	if (!g_hwnd) {
-		std::fprintf(stderr, "CreateWindowExW failed\n");
+		Logf("CreateWindowExW failed\n");
 		return 1;
 	}
-	EnsureWindowSizeForFullscreen(g_hwnd);
 	ShowWindow(g_hwnd, SW_SHOW);
 	UpdateWindow(g_hwnd);
 
@@ -1086,11 +1647,12 @@ int main(int argc, char** argv) {
 	g_baseSysMs = SystemMsNow();
 
 	try {
-		rtc::InitLogger(rtc::LogLevel::Info);
+		// Increase verbosity to catch media-handler exceptions (RTP depacketizer).
+		rtc::InitLogger(rtc::LogLevel::Verbose);
 		EnsureD3D(g_hwnd);
 		UpdateLetterboxRect();
 	} catch (const std::exception& e) {
-		std::fprintf(stderr, "Init D3D failed: %s\n", e.what());
+		Logf("Init D3D failed: %s\n", e.what());
 		return 2;
 	}
 
@@ -1099,7 +1661,7 @@ int main(int argc, char** argv) {
 		try {
 			RunSignalingAndWebRtc(host, port, clientId, exePath);
 		} catch (const std::exception& e) {
-			std::fprintf(stderr, "WebRTC thread error: %s\n", e.what());
+			Logf("WebRTC thread error: %s\n", e.what());
 			g_exitRequested.store(true, std::memory_order_relaxed);
 			PostMessage(g_hwnd, WM_CLOSE, 0, 0);
 		}
@@ -1115,12 +1677,16 @@ int main(int argc, char** argv) {
 	std::vector<uint8_t> localBgra;
 
 	MSG msg{};
+	static uint64_t g_debugPrintedFrames = 0;
 	while (!g_exitRequested.load(std::memory_order_relaxed)) {
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
 		if (g_exitRequested.load(std::memory_order_relaxed)) break;
+
+		// Send queued DataChannel messages on the main/render thread.
+		DrainDcSendPending();
 
 		bool haveFrame = false;
 		int w = 0;
@@ -1144,28 +1710,72 @@ int main(int argc, char** argv) {
 			continue;
 		}
 
-		// Publish texture update
-		EnsureTextureIfNeeded(w, h);
-		if (g_d3d.texture) {
-			g_d3d.context->UpdateSubresource(
-				g_d3d.texture.Get(),
-				0, nullptr,
-				localBgra.data(),
-				w * 4,
-				0);
+		if (g_debugPrintedFrames < 5) {
+			Logf("[receiver] show frame idx=%llu size=%dx%d\n",
+				(unsigned long long)decodedIndex, w, h);
+			++g_debugPrintedFrames;
 		}
-		UpdateLetterboxRectFor(w, h);
 
-		// Draw
-		RenderOneFrame(w, h);
+		// Publish texture update + draw.
+		// Note: access violations may not be caught by C++ exceptions.
+		// We install an unhandled exception logger at process level.
+		const bool logStages = (decodedIndex <= 2);
+		try {
+			if (logStages) Logf("[receiver] stage EnsureTextureIfNeeded begin\n");
+			EnsureTextureIfNeeded(w, h);
+			if (logStages) Logf("[receiver] stage EnsureTextureIfNeeded end\n");
+			if (g_d3d.texture) {
+				if (logStages) Logf("[receiver] stage UpdateSubresource begin\n");
+				g_d3d.context->UpdateSubresource(
+					g_d3d.texture.Get(),
+					0, nullptr,
+					localBgra.data(),
+					w * 4,
+					0);
+				if (logStages) Logf("[receiver] stage UpdateSubresource end\n");
+			}
+			UpdateLetterboxRectFor(w, h);
 
-		// Present and time it
-		HRESULT hr = g_d3d.swapChain->Present(0, 0);
-		(void)hr;
+			// Draw
+			if (logStages) Logf("[receiver] stage RenderOneFrame begin\n");
+			RenderOneFrame(w, h);
+			if (logStages) Logf("[receiver] stage RenderOneFrame end\n");
+
+			// Present and time it (QPC immediately after Present, before optional FPS cap sleep)
+			if (logStages) Logf("[receiver] stage Present begin\n");
+			(void)g_d3d.swapChain->Present(0, 0);
+			if (logStages) Logf("[receiver] stage Present end\n");
+		} catch (const std::exception& e) {
+			Logf("[receiver] render exception: %s\n", e.what());
+			g_exitRequested.store(true, std::memory_order_relaxed);
+			if (g_hwnd) PostMessage(g_hwnd, WM_CLOSE, 0, 0);
+			break;
+		} catch (...) {
+			Logf("[receiver] render exception: unknown\n");
+			g_exitRequested.store(true, std::memory_order_relaxed);
+			if (g_hwnd) PostMessage(g_hwnd, WM_CLOSE, 0, 0);
+			break;
+		}
 		LARGE_INTEGER qpcNow{};
 		QueryPerformanceCounter(&qpcNow);
 		const uint64_t presentQpc = (uint64_t)qpcNow.QuadPart;
 		const uint64_t presentMs = QpcToSysMs(presentQpc);
+
+		if (g_maxPresentFps > 0) {
+			using namespace std::chrono;
+			static steady_clock::time_point nextCap = steady_clock::now();
+			// Defensive: avoid any possible divide-by-zero even if value gets corrupted.
+			const int fps = g_maxPresentFps;
+			const int denom = (fps > 0) ? fps : 1;
+			const auto period = microseconds(1000000 / denom);
+			const auto now = steady_clock::now();
+			if (now < nextCap)
+				std::this_thread::sleep_until(nextCap);
+			nextCap += period;
+			const auto after = steady_clock::now();
+			if (nextCap < after)
+				nextCap = after;
+		}
 
 		// Compute visible delay
 		double thetaLocal = 0.0;

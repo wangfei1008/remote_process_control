@@ -76,10 +76,10 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
         {
 			std::cout << "DataChannel message from " << clientId << ": " << msg << std::endl;
             try {                
-				if (msg.find("Pong") != -1) {
-                    dc->send("Ping");// Just a pong response, ignore					
-					return;
-				}
+                    if (msg.find("Pong") != -1) {
+                        dc->send("Ping");// Just a pong response, ignore					
+                        return;
+                    }
 
                 auto json = nlohmann::json::parse(msg);
                 const std::string type = json.value("type", "");

@@ -60,6 +60,9 @@
     <ClCompile Include="silence_opus_source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="dxgi_capture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="screen_capture.hpp">
@@ -102,6 +105,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="silence_opus_source.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dxgi_capture.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -100,10 +100,10 @@ ProcessManager::ProcessManager()
         m_capture_all_windows = (std::atoi(envCaptureAll) != 0);
     }
     if (const char* envIdleFps = std::getenv("RPC_IDLE_FPS")) {
-        m_idle_fps = std::max(1, std::atoi(envIdleFps));
+        m_idle_fps = (std::max)(1, std::atoi(envIdleFps));
     }
     if (const char* envActiveFps = std::getenv("RPC_ACTIVE_FPS")) {
-        m_active_fps = std::max(1, std::atoi(envActiveFps));
+        m_active_fps = (std::max)(1, std::atoi(envActiveFps));
     }
     if (m_idle_fps > m_active_fps) m_idle_fps = m_active_fps;
     m_fps = m_active_fps;
@@ -345,10 +345,10 @@ uint64_t ProcessManager::quick_frame_signature(const std::vector<uint8_t>& frame
     if (frame.empty() || width <= 0 || height <= 0) return 0;
     const int bytesPerPixel = 3;
     const size_t stride = static_cast<size_t>(width) * bytesPerPixel;
-    const int sampleRows = std::min(height, 32);
-    const int sampleCols = std::min(width, 64);
-    const int rowStep = std::max(1, height / sampleRows);
-    const int colStep = std::max(1, width / sampleCols);
+    const int sampleRows = (std::min)(height, 32);
+    const int sampleCols = (std::min)(width, 64);
+    const int rowStep = (std::max)(1, height / sampleRows);
+    const int colStep = (std::max)(1, width / sampleCols);
     uint64_t sig = 1469598103934665603ull; // FNV-1a basis
     for (int y = 0; y < height; y += rowStep) {
         const size_t rowBase = static_cast<size_t>(y) * stride;
@@ -529,8 +529,9 @@ void ProcessManager::load_next_sample()
     const std::chrono::steady_clock::time_point t_enc_end = std::chrono::steady_clock::now();
 
     if (ok && !h264_data.empty()) {
-        // Send the encoded H264 access unit directly as the client payload.
-        sample = rtc::binary(h264_data.begin(), h264_data.end());
+        // rtc::binary is std::vector<std::byte>; cannot construct from uint8_t iterators (C2440).
+        const std::byte* p = reinterpret_cast<const std::byte*>(h264_data.data());
+        sample.assign(p, p + h264_data.size());
         sampleTime_us += get_sample_duration_us();
 
         m_last_capture_ms = static_cast<uint32_t>(
@@ -574,7 +575,7 @@ std::vector<HWND> ProcessManager::find_all_windows(DWORD pid)
     std::vector<HWND> result;
     EnumData data = { pid, &result };
 
-    EnumWindows(static_cast<WNDENUMPROC>([](HWND hwnd, LPARAM lParam)->BOOL __stdcall {
+    EnumWindows(static_cast<WNDENUMPROC>([](HWND hwnd, LPARAM lParam)->BOOL{
         DWORD winPid = 0;
         GetWindowThreadProcessId(hwnd, &winPid);
 
