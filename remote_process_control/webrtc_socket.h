@@ -24,6 +24,7 @@ private:
 	std::shared_ptr<rtc::PeerConnection> _init_peer_connection(const std::string& id);
 	std::shared_ptr<Stream> _get_or_create_stream();
     void _stop_and_reset_stream();
+    void _close_all_clients();
     void _schedule_idle_close(int idleSeconds);
 	bool _request_control(const std::string& clientId, std::shared_ptr<rtc::DataChannel> dc);
 	void _release_control(const std::string& clientId);

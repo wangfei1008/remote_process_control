@@ -5,7 +5,7 @@ DesktopScreenSource::DesktopScreenSource(int width, int height, int fps, bool lo
     : m_width(width)
 	, m_height(height)
     , fps(fps)
-    , capture()
+    , m_capture()
     , loop(loop)
 {
     m_av_codec_ctx = create_h264_encoder(width, height, fps);
@@ -25,7 +25,7 @@ void DesktopScreenSource::load_next_sample()
 {
     if (!running) return;
     std::vector<uint8_t> rbg_frame(m_width * m_height * 3);
-    if (capture.grab_frame(rbg_frame.data(), m_width, m_height)) {
+    if (m_capture.grab_frame(rbg_frame.data(), m_width, m_height)) {
         // Encode the captured RGB frame into H264.
         std::vector<uint8_t> h264_data;
         // encode_rgb signature includes frame sequence and keyframe control.

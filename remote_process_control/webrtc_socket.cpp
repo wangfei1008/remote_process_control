@@ -2,8 +2,6 @@
 #include <thread>
 #include <chrono>
 #include "input_controller.h"
-#include "h264_file_parser.hpp"
-#include "opus_file_parser.hpp"
 #include "client_peer_connection.h"
 #include "desktop_screen_source.h"
 #include "process_manager.h"
@@ -31,7 +29,10 @@ void WebRTCSocket::start(const std::string& ip, int port)
 
 void WebRTCSocket::_init_signaling()
 {    
-    std::string stun_server = "stun:stun.l.google.com:19302";
+    //??????stun:stun.l.tencent.com:3478
+    //??????????????????stun:stun.aliyun.com : 3478
+    //google:stun:stun.l.google.com:19302
+    std::string stun_server = "stun:stun.l.tencent.com:3478";
 
     m_config.iceServers.emplace_back(stun_server);
     m_config.disableAutoNegotiation = true;
@@ -41,7 +42,12 @@ void WebRTCSocket::_init_signaling()
     m_ws = std::make_shared<rtc::WebSocket>();
 
     m_ws->onOpen([this]() { LOGINFO("url = %s, WebSocket connected, signaling ready", m_signaling_url.c_str()); });
-    m_ws->onClosed([this]() { LOGINFO("url = %s, WebSocket closed", m_signaling_url.c_str()); });
+    m_ws->onClosed([this]() {
+        LOGINFO("url = %s, WebSocket closed", m_signaling_url.c_str());
+        m_thread_queue.dispatch([this]() {
+            _stop_and_reset_stream();
+        });
+    });
     m_ws->onError([this](const std::string& error) { LOGERROR("url = %s, WebSocket failed: %s", m_signaling_url.c_str(), error.c_str()); });
 	m_ws->onMessage([this](const std::variant<rtc::binary, std::string>& data) 
                     {    
@@ -94,6 +100,9 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     std::string type = it->get<std::string>();
     if (type == "request") // start session request
     {
+        // Always start from a clean state: each request should be a fresh session.
+        _stop_and_reset_stream();
+
         // optional process path from frontend
         if (message.contains("exePath")) {
             const std::string exePath = message.value("exePath", "");
@@ -135,32 +144,8 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     }
     else if (type == "stop")
     {
-        const bool closeProcess = message.value("closeProcess", false);
-        const bool autoClose = message.value("autoClose", false);
-        const int idleSeconds = message.value("idleSeconds", 10);
-
-        if (autoClose) {
-            m_close_process_on_empty = true;
-            m_idle_close_seconds = (idleSeconds < 0) ? 0 : idleSeconds;
-        } else {
-            m_close_process_on_empty = closeProcess;
-        }
-
-        if (auto jt = m_clients.find(id); jt != m_clients.end())
-        {
-            try {
-                jt->second->get_peer_connection()->close();
-            } catch (...) {}
-            m_clients.erase(jt);
-        }
-        _release_control(id);
-        if (closeProcess) {
-            _stop_and_reset_stream();
-        } else if (autoClose) {
-            if (m_clients.empty()) {
-                _schedule_idle_close(m_idle_close_seconds);
-            }
-        }
+        // Regardless of who initiated stop, enforce full cleanup and let frontend exit video page.
+        _stop_and_reset_stream();
     }
 }
 
@@ -177,14 +162,11 @@ std::shared_ptr<rtc::PeerConnection> WebRTCSocket::_init_peer_connection(const s
                 m_thread_queue.dispatch([id, this]() {
                     m_clients.erase(id);
                     _release_control(id);
+                    // Strong lifecycle guarantee:
+                    // when frontend closes page/stream and no clients remain,
+                    // immediately tear down process/stream resources.
                     if (m_clients.empty()) {
-                        if (m_close_process_on_empty) {
-                            if (m_idle_close_seconds > 0) {
-                                _schedule_idle_close(m_idle_close_seconds);
-                            } else {
-                                _stop_and_reset_stream();
-                            }
-                        }
+                        _stop_and_reset_stream();
                     }
                 });
             }
@@ -227,7 +209,6 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
     auto video = std::make_shared<ProcessManager>();
     video->set_on_remote_exit([this]() {
         m_thread_queue.dispatch([this]() {
-            _broadcast_remote_process_exited();
             _stop_and_reset_stream();
         });
     });
@@ -261,12 +242,22 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                     std::chrono::system_clock::now().time_since_epoch()).count());
                 uint32_t cap_ms = 0;
                 uint32_t enc_ms = 0;
+                bool capHw = false;
+                bool dxgiDisabled = false;
+                int topBlackStripStreak = 0;
+                int dxgiInstabilityScore = 0;
+                uint64_t forceSwUntilMs = 0;
                 if (auto s = ws.lock()) {
                     if (auto pm = std::dynamic_pointer_cast<ProcessManager>(s->m_c_video)) {
                         cap_ms = pm->get_last_capture_ms();
                         enc_ms = pm->get_last_encode_ms();
                         const uint64_t fu = pm->get_last_frame_unix_ms();
                         if (fu != 0) srv_wall = fu;
+                        capHw = pm->get_last_capture_used_hw();
+                        dxgiDisabled = pm->is_dxgi_disabled_for_session();
+                        topBlackStripStreak = pm->get_top_black_strip_streak();
+                        dxgiInstabilityScore = pm->get_dxgi_instability_score();
+                        forceSwUntilMs = pm->get_force_software_capture_until_unix_ms();
                     }
                 }
                 const nlohmann::json mark = {
@@ -283,6 +274,35 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                     try {
                         ch->send(payload);
                     } catch (...) {
+                    }
+                }
+
+                // Capture health telemetry for frontend visualization/debug.
+                // Keep it low frequency to avoid extra signaling overhead.
+                constexpr uint64_t kCaptureHealthInterval = 30;
+                if ((videoFrameIndex % kCaptureHealthInterval) == 0) {
+                    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                    const bool forceSwActive = (forceSwUntilMs != 0 && nowMs < forceSwUntilMs);
+                    const nlohmann::json health = {
+                        {"type", "captureHealth"},
+                        {"backend", capHw ? "dxgi" : "gdi"},
+                        {"dxgiDisabledForSession", dxgiDisabled},
+                        {"topBlackStripStreak", topBlackStripStreak},
+                        {"dxgiInstabilityScore", dxgiInstabilityScore},
+                        {"forceSoftwareActive", forceSwActive},
+                        {"forceSoftwareRemainMs", forceSwActive ? (forceSwUntilMs - nowMs) : 0},
+                        {"capMs", cap_ms},
+                        {"encMs", enc_ms},
+                    };
+                    const std::string healthPayload = health.dump();
+                    for (const auto& id_client : m_clients) {
+                        auto ch = id_client.second->get_data_channel();
+                        if (!ch) continue;
+                        try {
+                            ch->send(healthPayload);
+                        } catch (...) {
+                        }
                     }
                 }
             }
@@ -316,8 +336,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
 
                     //std::cout << "Sending " << streamType << " sample with size: " << std::to_string(sample.size()) << " to " << client << std::endl;
                     try {
-                        trackData->track->sendFrame(
-                            sample, std::chrono::duration<double, std::micro>(sampleTime));
+                        trackData->track->sendFrame(sample, std::chrono::duration<double, std::micro>(sampleTime));
                     }
                     catch (const std::exception& e) {
                         std::cerr << "Unable to send " << streamType << " packet: " << e.what() << std::endl;
@@ -363,6 +382,12 @@ void WebRTCSocket::_stop_and_reset_stream()
     // Cancel any pending idle-close.
     m_idle_close_gen.fetch_add(1, std::memory_order_relaxed);
 
+    // Notify all active frontends to leave video page before teardown.
+    _broadcast_remote_process_exited();
+
+    // Ensure all client PeerConnections are closed and forgotten.
+    _close_all_clients();
+
     InputController::instance()->clear_mouse_target();
 
     std::shared_ptr<Stream> local;
@@ -373,6 +398,29 @@ void WebRTCSocket::_stop_and_reset_stream()
     }
     if (local) {
         try { local->stop(); } catch (...) {}
+    }
+}
+
+void WebRTCSocket::_close_all_clients()
+{
+    std::vector<std::shared_ptr<ClientPeerConnection>> clients;
+    clients.reserve(m_clients.size());
+    for (auto& kv : m_clients) {
+        clients.push_back(kv.second);
+    }
+    m_clients.clear();
+    {
+        std::scoped_lock lk(m_control_mtx);
+        m_controller_id.clear();
+    }
+
+    for (auto& c : clients) {
+        if (!c) continue;
+        try {
+            auto pc = c->get_peer_connection();
+            if (pc) pc->close();
+        } catch (...) {
+        }
     }
 }
 

@@ -35,6 +35,8 @@
             rpcStreamH: 864,
             remoteControlEnabled: true,
             isControlEnabled: false,
+            /** rpcWindow mode: pass exePath via URL to auto-start the remote app. */
+            rpcExePath: null,
             /** 独立窗口/应用模式：隐藏网页控制台，仅全屏远程画面（由 URL ?rpcWindow=1 开启） */
             rpcWindowMode: false,
             /** WebSocket 连通后自动 Start（应用模式默认 true，可用 autostart=0 关闭） */
@@ -187,6 +189,14 @@
         if (rpcWindow) {
             const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '90000', 10);
             session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 90000;
+
+            // Pass app exe path from URL for multi-window desktop container.
+            const exePathParam = params.get('exePath');
+            if (exePathParam && String(exePathParam).trim() !== '') {
+                session.rpcExePath = exePathParam;
+                const exeEl = doc.getElementById('exe-path');
+                if (exeEl) exeEl.value = exePathParam;
+            }
         }
 
         const wTitle = params.get('windowTitle');
@@ -264,289 +274,17 @@
     }
 
     function keyboardEventToWindowsVk(ev) {
-        if (!ev || ev.isComposing) return 0;
-        const c = ev.code;
-        if (!c) return typeof ev.keyCode === 'number' ? ev.keyCode : 0;
-        const oem = {
-            Minus: 189, Equal: 187, BracketLeft: 219, BracketRight: 221, Backslash: 220,
-            Semicolon: 186, Quote: 222, Backquote: 192, Comma: 188, Period: 190, Slash: 191,
-            IntlBackslash: 220,
-        };
-        if (oem[c] !== undefined) return oem[c];
-        const named = {
-            Backspace: 8, Tab: 9, Enter: 13, NumpadEnter: 13,
-            ShiftLeft: 16, ShiftRight: 16, ControlLeft: 17, ControlRight: 17,
-            AltLeft: 18, AltRight: 18, Pause: 19, CapsLock: 20, Escape: 27, Space: 32,
-            PageUp: 33, PageDown: 34, End: 35, Home: 36,
-            ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
-            PrintScreen: 44, Insert: 45, Delete: 46,
-            MetaLeft: 91, MetaRight: 92, ContextMenu: 93,
-            ScrollLock: 145, NumLock: 144,
-        };
-        if (named[c] !== undefined) return named[c];
-        if (c.length === 4 && c.indexOf('Key') === 0) {
-            const ch = c.charCodeAt(3);
-            if (ch >= 65 && ch <= 90) return ch;
+        if (window.__rpcUI && typeof window.__rpcUI.keyboardEventToWindowsVk === 'function') {
+            return window.__rpcUI.keyboardEventToWindowsVk(ev);
         }
-        if (c.length === 6 && c.indexOf('Digit') === 0) {
-            const d = c.charCodeAt(5) - 48;
-            if (d >= 0 && d <= 9) return 48 + d;
-        }
-        const fm = /^F(\d{1,2})$/.exec(c);
-        if (fm) {
-            const fn = parseInt(fm[1], 10);
-            if (fn >= 1 && fn <= 24) return 111 + fn;
-        }
-        if (c.indexOf('Numpad') === 0) {
-            if (c === 'Numpad0') return 96;
-            if (c.length === 7 && c.charAt(6) >= '1' && c.charAt(6) <= '9')
-                return 96 + parseInt(c.charAt(6), 10);
-            if (c === 'NumpadDecimal') return 110;
-            if (c === 'NumpadAdd') return 107;
-            if (c === 'NumpadSubtract') return 109;
-            if (c === 'NumpadMultiply') return 106;
-            if (c === 'NumpadDivide') return 111;
-        }
-        return typeof ev.keyCode === 'number' ? ev.keyCode : 0;
+        return 0;
     }
 
     function pointerToVideoPixels(video, clientX, clientY, streamW, streamH) {
-        const rect = video.getBoundingClientRect();
-        let iw = video.videoWidth;
-        let ih = video.videoHeight;
-        if (!iw || !ih) {
-            iw = streamW;
-            ih = streamH;
+        if (window.__rpcUI && typeof window.__rpcUI.pointerToVideoPixels === 'function') {
+            return window.__rpcUI.pointerToVideoPixels(video, clientX, clientY, streamW, streamH);
         }
-        if (!iw || !ih) return null;
-        const rw = rect.width;
-        const rh = rect.height;
-        const scale = Math.min(rw / iw, rh / ih);
-        const contentW = iw * scale;
-        const contentH = ih * scale;
-        const offsetX = (rw - contentW) / 2;
-        const offsetY = (rh - contentH) / 2;
-        let px = clientX - rect.left - offsetX;
-        let py = clientY - rect.top - offsetY;
-        px = Math.max(0, Math.min(contentW, px));
-        py = Math.max(0, Math.min(contentH, py));
-        return {
-            absoluteX: Math.round((px / contentW) * iw),
-            absoluteY: Math.round((py / contentH) * ih),
-            videoWidth: iw,
-            videoHeight: ih,
-        };
-    }
-
-    function smoothEwma(prev, sample, alpha) {
-        if (prev == null || isNaN(prev)) return sample;
-        return prev * (1 - alpha) + sample * alpha;
-    }
-
-    /**
-     * 延时诊断：DataChannel 对时(latPing/latPong)、frameMark、getStats(抖动缓冲/解码/ICE RTT)、requestVideoFrameCallback。
-     * 总延时为粗算：发送端采集+编码 + 编码结束→DC收到 + 抖动缓冲均值 + 解码均值（详见控制台 [latency] 日志）。
-     */
-    function createLatencyDiagnostics(session, doc) {
-        const state = {
-            thetaMs: null,
-            rttMs: null,
-            lastDcLagMs: null,
-            lastMarkCapMs: null,
-            lastMarkEncMs: null,
-            lastMarkSeq: null,
-            rvfHandle: null,
-            pingTimer: null,
-            statsTimer: null,
-            videoEl: null,
-            pingSeq: 0,
-        };
-
-        function hudText(text) {
-            const el = doc.getElementById('rpc-latency-hud');
-            if (el) el.textContent = text;
-        }
-
-        function tryHandleMessage(str) {
-            try {
-                const j = JSON.parse(str);
-                if (!j || typeof j.type !== 'string') return false;
-                if (j.type === 'latPong') {
-                    const t2 = Date.now();
-                    const tCli = Number(j.tCli) || 0;
-                    const rtt = Math.max(0, t2 - tCli);
-                    const tSrv = Number(j.tSrv) || 0;
-                    const theta = (tSrv + rtt / 2) - t2;
-                    state.thetaMs = smoothEwma(state.thetaMs, theta, 0.25);
-                    state.rttMs = smoothEwma(state.rttMs, rtt, 0.25);
-                    console.info('[latency] latPong RTT≈' + Math.round(rtt) + 'ms theta≈' + Math.round(theta)
-                        + 'ms（服务端与浏览器时钟换算，用于 frameMark）');
-                    return true;
-                }
-                if (j.type === 'frameMark') {
-                    const tRecv = Date.now();
-                    const srvMs = Number(j.srvMs) || 0;
-                    const th = state.thetaMs;
-                    let dcLag = null;
-                    if (th != null && !isNaN(th)) {
-                        dcLag = tRecv - srvMs + th;
-                    }
-                    state.lastDcLagMs = dcLag;
-                    state.lastMarkCapMs = j.capMs;
-                    state.lastMarkEncMs = j.encMs;
-                    state.lastMarkSeq = j.seq;
-                    if (dcLag != null && !isNaN(dcLag)) {
-                        console.info('[latency] frameMark seq=' + j.seq
-                            + ' 发送端 cap+enc_ms=' + j.capMs + '+' + j.encMs
-                            + ' 编码结束→本机收到DC≈' + Math.round(dcLag) + 'ms（含 RTP/网络/浏览器）');
-                    } else {
-                        console.info('[latency] frameMark seq=' + j.seq + ' cap=' + j.capMs + ' enc=' + j.encMs
-                            + '（等待 latPing 对时后可算链路延时）');
-                    }
-                    return true;
-                }
-            } catch (_) {
-                return false;
-            }
-            return false;
-        }
-
-        function sendLatPing() {
-            if (!session.dc || session.dc.readyState !== 'open') return;
-            state.pingSeq += 1;
-            session.dc.send(JSON.stringify({ type: 'latPing', seq: state.pingSeq, tCli: Date.now() }));
-        }
-
-        function pollStatsImpl(pc) {
-            if (!pc) return;
-            const p = pc.getStats(null);
-            if (!p || typeof p.then !== 'function') return;
-            p.then(function (report) {
-                let inboundVideo = null;
-                let candPair = null;
-                report.forEach(function (s) {
-                    if (s.type === 'inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) {
-                        inboundVideo = s;
-                    }
-                    if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated) {
-                        candPair = s;
-                    }
-                });
-                if (!candPair) {
-                    report.forEach(function (s) {
-                        if (s.type === 'candidate-pair' && s.state === 'succeeded') candPair = s;
-                    });
-                }
-
-                const parts = [];
-                let jitterBufMs = null;
-                let decodeMsPerFrame = null;
-                if (inboundVideo) {
-                    const jbd = inboundVideo.jitterBufferDelay;
-                    const jbec = inboundVideo.jitterBufferEmittedCount;
-                    if (typeof jbd === 'number' && typeof jbec === 'number' && jbec > 0) {
-                        jitterBufMs = (jbd / jbec) * 1000;
-                        parts.push('抖动缓冲均值≈' + Math.round(jitterBufMs) + 'ms');
-                    }
-                    const td = inboundVideo.totalDecodeTime;
-                    const fd = inboundVideo.framesDecoded;
-                    if (typeof td === 'number' && typeof fd === 'number' && fd > 0) {
-                        decodeMsPerFrame = (td / fd) * 1000;
-                        parts.push('解码均值≈' + decodeMsPerFrame.toFixed(1) + 'ms/帧');
-                    }
-                    if (typeof inboundVideo.jitter === 'number') {
-                        parts.push('RTP抖动=' + (inboundVideo.jitter * 1000).toFixed(2) + 'ms');
-                    }
-                    if (typeof inboundVideo.framesDropped === 'number') {
-                        parts.push('framesDropped=' + inboundVideo.framesDropped);
-                    }
-                }
-                let rttMsIce = null;
-                if (candPair && typeof candPair.currentRoundTripTime === 'number') {
-                    rttMsIce = candPair.currentRoundTripTime * 1000;
-                    parts.push('ICE_RTT≈' + Math.round(rttMsIce) + 'ms');
-                }
-
-                const cap = state.lastMarkCapMs != null ? Number(state.lastMarkCapMs) : 0;
-                const enc = state.lastMarkEncMs != null ? Number(state.lastMarkEncMs) : 0;
-                const senderPipe = (cap > 0 || enc > 0) ? (cap + enc) : 0;
-                const dcLag = state.lastDcLagMs;
-                let totalEst = null;
-                if (dcLag != null && !isNaN(dcLag) && jitterBufMs != null) {
-                    totalEst = senderPipe + dcLag + jitterBufMs + (decodeMsPerFrame || 0);
-                }
-
-                let line = '[latency][browser] ' + (parts.length ? parts.join(' | ') : '(无 inbound-rtp 视频统计)');
-                if (senderPipe > 0) line += ' | 发送端采集+编码(最近frameMark)=' + Math.round(senderPipe) + 'ms';
-                if (dcLag != null && !isNaN(dcLag)) line += ' | 编码结束→DC收到≈' + Math.round(dcLag) + 'ms';
-                if (totalEst != null && !isNaN(totalEst)) {
-                    line += ' | 粗算总延时≈' + Math.round(totalEst) + 'ms';
-                    line += ' (=采集+编码+编码→DC+RTP侧抖动缓冲+解码；不含 <video> 合成/显示器)';
-                }
-                console.info(line);
-
-                const shortHud = [];
-                if (rttMsIce != null) shortHud.push('RTT' + Math.round(rttMsIce));
-                if (jitterBufMs != null) shortHud.push('JB' + Math.round(jitterBufMs));
-                if (dcLag != null && !isNaN(dcLag)) shortHud.push('链' + Math.round(dcLag));
-                if (totalEst != null) shortHud.push('Σ~' + Math.round(totalEst));
-                hudText(shortHud.length ? ('延时: ' + shortHud.join(' ')) : '延时: 等对时…');
-            }).catch(function (e) {
-                console.warn('[latency] getStats 失败', e);
-            });
-        }
-
-        function scheduleVideoFrameHook(videoEl) {
-            if (!videoEl || typeof videoEl.requestVideoFrameCallback !== 'function') return;
-            function onFrame(now, meta) {
-                if (meta && typeof meta.presentationTime === 'number' && typeof now === 'number') {
-                    const slip = now - meta.presentationTime;
-                    if (!state._rvfLogNext || Date.now() > state._rvfLogNext) {
-                        state._rvfLogNext = Date.now() + 5000;
-                        console.info('[latency] requestVideoFrameCallback presentation 与 now 差≈' + slip.toFixed(1) + 'ms（浏览器合成层）');
-                    }
-                }
-                if (state.videoEl === videoEl) {
-                    state.rvfHandle = videoEl.requestVideoFrameCallback(onFrame);
-                }
-            }
-            if (state.videoEl && state.rvfHandle != null && typeof state.videoEl.cancelVideoFrameCallback === 'function') {
-                try { state.videoEl.cancelVideoFrameCallback(state.rvfHandle); } catch (_) {}
-            }
-            state.videoEl = videoEl;
-            state.rvfHandle = videoEl.requestVideoFrameCallback(onFrame);
-        }
-
-        return {
-            tryHandleMessage: tryHandleMessage,
-            onDataChannelOpen: function () {
-                if (state.pingTimer) clearInterval(state.pingTimer);
-                state.pingTimer = setInterval(sendLatPing, 3000);
-                sendLatPing();
-            },
-            bindPeer: function (pc) {
-                if (state.statsTimer) clearInterval(state.statsTimer);
-                state.statsTimer = setInterval(function () {
-                    pollStatsImpl(pc);
-                }, 2000);
-                pollStatsImpl(pc);
-            },
-            bindVideo: function (videoEl) {
-                scheduleVideoFrameHook(videoEl);
-            },
-            dispose: function () {
-                if (state.pingTimer) clearInterval(state.pingTimer);
-                if (state.statsTimer) clearInterval(state.statsTimer);
-                state.pingTimer = null;
-                state.statsTimer = null;
-                if (state.videoEl && state.rvfHandle != null && typeof state.videoEl.cancelVideoFrameCallback === 'function') {
-                    try { state.videoEl.cancelVideoFrameCallback(state.rvfHandle); } catch (_) {}
-                }
-                state.rvfHandle = null;
-                state.videoEl = null;
-                hudText('延时: —');
-            },
-        };
+        return null;
     }
 
     function bindStatusElements(doc) {
@@ -560,6 +298,7 @@
             websocketIndicator: doc.getElementById('websocket-indicator'),
             iceConnectionIndicator: doc.getElementById('ice-connection-indicator'),
             dataChannelIndicator: doc.getElementById('data-channel-indicator'),
+            captureHealthState: doc.getElementById('capture-health-state'),
         };
     }
 
@@ -587,567 +326,99 @@
     }
 
     function getMainVideo(doc) {
+        if (window.__rpcUI && typeof window.__rpcUI.getMainVideo === 'function') {
+            return window.__rpcUI.getMainVideo(doc);
+        }
         return doc.getElementById('rpc-main-video');
     }
 
     function getVideoStage(doc) {
+        if (window.__rpcUI && typeof window.__rpcUI.getVideoStage === 'function') {
+            return window.__rpcUI.getVideoStage(doc);
+        }
         return doc.getElementById('video-stage');
     }
 
     function applyVideoDisplaySize(video) {
-        if (!video) return;
-        const iw = video.videoWidth;
-        const ih = video.videoHeight;
-        if (!iw || !ih) return;
-        const doc = video.ownerDocument;
-        const compact = doc && doc.documentElement.classList.contains('rpc-window-mode');
-        /* 应用/全屏模式 HUD 已藏，不必留过大边距，否则易被误认为「画面不全」 */
-        const marginX = compact ? 16 : 40;
-        const marginY = compact ? 20 : 100;
-        const maxW = Math.max(160, window.innerWidth - marginX);
-        const maxH = Math.max(120, window.innerHeight - marginY);
-        let dw = iw;
-        let dh = ih;
-        if (dw > maxW) {
-            const s = maxW / dw;
-            dw = Math.round(dw * s);
-            dh = Math.round(dh * s);
+        if (window.__rpcUI && typeof window.__rpcUI.applyVideoDisplaySize === 'function') {
+            window.__rpcUI.applyVideoDisplaySize(video);
         }
-        if (dh > maxH) {
-            const s = maxH / dh;
-            dw = Math.round(dw * s);
-            dh = Math.round(dh * s);
-        }
-        video.style.width = dw + 'px';
-        video.style.height = dh + 'px';
     }
 
     function tryEnterStageFullscreen(doc) {
-        const stage = getVideoStage(doc);
-        if (!stage || stage.hidden) return;
-        try {
-            if (typeof stage.requestFullscreen === 'function') {
-                const p = stage.requestFullscreen({ navigationUI: 'hide' });
-                if (p && typeof p.catch === 'function') p.catch(function () {});
-            } else if (typeof stage.webkitRequestFullscreen === 'function') {
-                stage.webkitRequestFullscreen();
-            } else if (typeof stage.msRequestFullscreen === 'function') {
-                stage.msRequestFullscreen();
-            }
-        } catch (_) {}
+        if (window.__rpcUI && typeof window.__rpcUI.tryEnterStageFullscreen === 'function') {
+            window.__rpcUI.tryEnterStageFullscreen(doc);
+        }
     }
 
     function exitDocumentFullscreen(doc) {
-        const ex = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
-        if (ex) {
-            try {
-                ex.call(doc);
-            } catch (_) {}
+        if (window.__rpcUI && typeof window.__rpcUI.exitDocumentFullscreen === 'function') {
+            window.__rpcUI.exitDocumentFullscreen(doc);
         }
     }
 
     function showVideoStage(session, doc) {
-        const stage = getVideoStage(doc);
-        if (!stage) return;
-        stage.hidden = false;
-        if (session.electronCompactLauncher) {
-            session.electronVideoOpen = true;
-            doc.documentElement.classList.add('rpc-window-mode', 'electron-video-active');
-            const splash = doc.getElementById('rpc-window-wait');
-            if (splash) splash.hidden = true;
-        }
-        session.activeVideo = getMainVideo(doc);
-        if (session.activeVideo && session.activeVideo.srcObject) {
-            session.activeVideo.play().catch(function () {});
-            applyVideoDisplaySize(session.activeVideo);
+        if (window.__rpcUI && typeof window.__rpcUI.showVideoStage === 'function') {
+            window.__rpcUI.showVideoStage(session, doc);
         }
     }
 
     function hideVideoStage(doc) {
-        const stage = getVideoStage(doc);
-        if (!stage) return;
-        exitDocumentFullscreen(doc);
-        stage.hidden = true;
-        doc.body.style.overflow = '';
+        if (window.__rpcUI && typeof window.__rpcUI.hideVideoStage === 'function') {
+            window.__rpcUI.hideVideoStage(doc);
+        }
     }
 
     function updateVideoSizeInfo(doc) {
-        const v = getMainVideo(doc);
-        const el = doc.getElementById('rpc-video-size');
-        if (el && v) el.textContent = v.videoWidth + ' x ' + v.videoHeight;
+        if (window.__rpcUI && typeof window.__rpcUI.updateVideoSizeInfo === 'function') {
+            window.__rpcUI.updateVideoSizeInfo(doc);
+        }
     }
 
     function canSendControl(session) {
+        if (window.__rpcUI && typeof window.__rpcUI.canSendControl === 'function') {
+            return window.__rpcUI.canSendControl(session);
+        }
         return session.remoteControlEnabled && session.dc && session.dc.readyState === 'open';
     }
 
     function isEventOnVideoHud(target) {
+        if (window.__rpcUI && typeof window.__rpcUI.isEventOnVideoHud === 'function') {
+            return window.__rpcUI.isEventOnVideoHud(target);
+        }
         return target && target.closest && target.closest('.video-stage-hud');
     }
 
     function sendMouseMoveFromEvent(session, video, event) {
-        if (!session.dc || !video) return;
-        const p = pointerToVideoPixels(
-            video, event.clientX, event.clientY, session.rpcStreamW, session.rpcStreamH,
-        );
-        if (!p) return;
-        session.dc.send(JSON.stringify({
-            type: 'mouseMove', x: 0, y: 0,
-            absoluteX: p.absoluteX, absoluteY: p.absoluteY,
-            videoWidth: p.videoWidth, videoHeight: p.videoHeight,
-        }));
+        if (window.__rpcUI && typeof window.__rpcUI.sendMouseMoveFromEvent === 'function') {
+            window.__rpcUI.sendMouseMoveFromEvent(session, video, event);
+        }
     }
 
     function setupStageMouse(session, doc) {
-        const stage = getVideoStage(doc);
-        const video = getMainVideo(doc);
-        if (!stage || !video || stage.__rpc_stage_mouse_bound) return;
-        stage.__rpc_stage_mouse_bound = true;
-        const d = video.ownerDocument;
-        let lastX = null;
-        let lastY = null;
-        const mapButton = function (b) { return b === 0 ? 0 : b === 2 ? 1 : 2; };
-
-        stage.addEventListener('mousemove', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            const p = pointerToVideoPixels(
-                video, event.clientX, event.clientY, session.rpcStreamW, session.rpcStreamH,
-            );
-            if (!p) return;
-            const posEl = d.getElementById('rpc-cursor-pos');
-            if (posEl) posEl.textContent = p.absoluteX + ', ' + p.absoluteY;
-            const dx = lastX === null ? 0 : p.absoluteX - lastX;
-            const dy = lastY === null ? 0 : p.absoluteY - lastY;
-            lastX = p.absoluteX;
-            lastY = p.absoluteY;
-            session.dc.send(JSON.stringify({
-                type: 'mouseMove',
-                x: Math.round(dx), y: Math.round(dy),
-                absoluteX: p.absoluteX, absoluteY: p.absoluteY,
-                videoWidth: p.videoWidth, videoHeight: p.videoHeight,
-            }));
-        });
-
-        stage.addEventListener('mousedown', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            event.preventDefault();
-            stage.setAttribute('tabindex', '-1');
-            stage.focus();
-            sendMouseMoveFromEvent(session, video, event);
-            session.dc.send(JSON.stringify({
-                type: 'mouseDown', button: mapButton(event.button), x: 0, y: 0,
-            }));
-        });
-
-        stage.addEventListener('mouseup', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            event.preventDefault();
-            sendMouseMoveFromEvent(session, video, event);
-            session.dc.send(JSON.stringify({
-                type: 'mouseUp', button: mapButton(event.button), x: 0, y: 0,
-            }));
-        });
-
-        stage.addEventListener('dblclick', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            event.preventDefault();
-            sendMouseMoveFromEvent(session, video, event);
-            session.dc.send(JSON.stringify({
-                type: 'mouseDoubleClick', button: mapButton(event.button), x: 0, y: 0,
-            }));
-        });
-
-        stage.addEventListener('wheel', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            event.preventDefault();
-            session.dc.send(JSON.stringify({
-                type: 'mouseWheel',
-                deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY),
-                x: 0, y: 0,
-            }));
-        }, { passive: false });
-
-        stage.addEventListener('contextmenu', function (event) {
-            if (isEventOnVideoHud(event.target)) return;
-            event.preventDefault();
-        });
+        if (window.__rpcUI && typeof window.__rpcUI.setupStageMouse === 'function') {
+            window.__rpcUI.setupStageMouse(session, doc);
+        }
     }
 
     function setupKeyboardOnStage(session, doc) {
-        const stage = getVideoStage(doc);
-        if (!stage || stage.__rpc_keyboard_bound) return;
-        stage.__rpc_keyboard_bound = true;
-        stage.setAttribute('tabindex', '-1');
-
-        function sendKey(type, event) {
-            if (isEventOnVideoHud(event.target)) return;
-            if (!canSendControl(session)) return;
-            if (event.key === 'Escape') return;
-            const vk = keyboardEventToWindowsVk(event);
-            if (!vk) return;
-            event.preventDefault();
-            session.dc.send(JSON.stringify({
-                type: type, vk: vk, key: event.key || '', code: event.code || '',
-                keyCode: typeof event.keyCode === 'number' ? event.keyCode : 0,
-                shiftKey: event.shiftKey ? 1 : 0, ctrlKey: event.ctrlKey ? 1 : 0,
-                altKey: event.altKey ? 1 : 0, metaKey: event.metaKey ? 1 : 0,
-            }));
+        if (window.__rpcUI && typeof window.__rpcUI.setupKeyboardOnStage === 'function') {
+            window.__rpcUI.setupKeyboardOnStage(session, doc);
         }
-
-        stage.addEventListener('keydown', function (e) { sendKey('keyDown', e); });
-        stage.addEventListener('keyup', function (e) { sendKey('keyUp', e); });
     }
 
     function setupRemoteControl(session, doc) {
-        const video = getMainVideo(doc);
-        if (!video) return;
-        setupStageMouse(session, doc);
-        setupKeyboardOnStage(session, doc);
-    }
-
-    function createWebRtcSessionController(session, doc, ui) {
-        const currentTimestamp = createTimestampState();
-        const latencyDiag = createLatencyDiagnostics(session, doc);
-        session.latencyDiag = latencyDiag;
-
-        function attachStreamToMainVideo(videoEl, mediaStream) {
-            if (!videoEl || !mediaStream) return;
-            session.activeVideo = videoEl;
-            session.activeVideo.__rpc_keyboard_bound = false;
-            const st = doc.getElementById('video-stage');
-            if (st) st.__rpc_stage_mouse_bound = false;
-            session.activeVideo.defaultMuted = true;
-            session.activeVideo.muted = true;
-            session.activeVideo.setAttribute('playsinline', '');
-            session.activeVideo.setAttribute('webkit-playsinline', '');
-            session.activeVideo.srcObject = mediaStream;
-            const vtrack = mediaStream.getVideoTracks && mediaStream.getVideoTracks()[0];
-            if (vtrack && vtrack.addEventListener) {
-                vtrack.addEventListener('unmute', function () {
-                    tryPlay();
-                    applyVideoDisplaySize(session.activeVideo);
-                    updateVideoSizeInfo(doc);
-                });
-            }
-            session.activeVideo.onloadedmetadata = function () {
-                if (session.activeVideo.videoWidth && session.activeVideo.videoHeight) {
-                    session.rpcStreamW = session.activeVideo.videoWidth;
-                    session.rpcStreamH = session.activeVideo.videoHeight;
-                    /* Electron 紧凑模式往往未带 rpcWindow=1，也必须置位，否则 10s 无视频定时器会一直误判 */
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
-                        onRpcVideoStreamReady(session);
-                    }
-                }
-                applyVideoDisplaySize(session.activeVideo);
-                updateVideoSizeInfo(doc);
-                setupRemoteControl(session, doc);
-                const splash = doc.getElementById('rpc-window-wait');
-                if (splash) splash.hidden = true;
-            };
-            session.activeVideo.onplay = function () { setupRemoteControl(session, doc); };
-            session.activeVideo.onplaying = function () {
-                if (session.rpcHadVideo || (!session.rpcWindowMode && !session.electronCompactLauncher)) return;
-                if (session.activeVideo.videoWidth && session.activeVideo.videoHeight) {
-                    session.rpcStreamW = session.activeVideo.videoWidth;
-                    session.rpcStreamH = session.activeVideo.videoHeight;
-                }
-                onRpcVideoStreamReady(session);
-            };
-            /* 解码后分辨率变化时更新显示尺寸与鼠标映射 */
-            session.activeVideo.addEventListener('resize', function () {
-                if (!session.activeVideo) return;
-                if (session.activeVideo.videoWidth && session.activeVideo.videoHeight) {
-                    session.rpcStreamW = session.activeVideo.videoWidth;
-                    session.rpcStreamH = session.activeVideo.videoHeight;
-                }
-                applyVideoDisplaySize(session.activeVideo);
-                updateVideoSizeInfo(doc);
-            });
-            function tryPlay() {
-                const p = session.activeVideo.play();
-                if (p && typeof p.catch === 'function') {
-                    p.catch(function (err) {
-                        logDataChannel(ui, '视频播放: ' + (err && err.message ? err.message : err) + ' — 请点击画面');
-                    });
-                }
-            }
-            tryPlay();
-            requestAnimationFrame(tryPlay);
-            latencyDiag.bindVideo(session.activeVideo);
+        if (window.__rpcUI && typeof window.__rpcUI.setupRemoteControl === 'function') {
+            window.__rpcUI.setupRemoteControl(session, doc);
         }
-
-        function createPeerConnection() {
-            const config = { bundlePolicy: 'max-bundle' };
-            const useStun = doc.getElementById('use-stun');
-            if (useStun && useStun.checked) {
-                config.iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-            }
-            const peer = new RTCPeerConnection(config);
-
-            peer.addEventListener('iceconnectionstatechange', function () {
-                if (ui.iceConnectionState) ui.iceConnectionState.textContent = peer.iceConnectionState;
-                if (ui.iceConnectionIndicator) {
-                    ui.iceConnectionIndicator.className =
-                        'status-indicator ' + (peer.iceConnectionState === 'connected' ? 'active' : '');
-                }
-            });
-            peer.addEventListener('icegatheringstatechange', function () {
-                if (ui.iceGatheringState) ui.iceGatheringState.textContent = peer.iceGatheringState;
-            });
-            peer.addEventListener('signalingstatechange', function () {
-                if (ui.signalingState) ui.signalingState.textContent = peer.signalingState;
-            });
-
-            peer.addEventListener('connectionstatechange', function () {
-                const st = peer.connectionState;
-                if ((!session.rpcWindowMode && !session.electronCompactLauncher) || session.rpcAutoClosed) return;
-                if (st === 'failed') {
-                    if (!shouldDeferRpcShellCloseUntilVideo(session)) {
-                        closeRpcShellOrWindow(session, 'webrtc_connection_failed');
-                    }
-                    return;
-                }
-                if (st === 'disconnected') {
-                    if (!session.rpcHadVideo) return;
-                    clearSessionTimer(session, 'rpcPcDisconnectTimer');
-                    session.rpcPcDisconnectTimer = setTimeout(function () {
-                        session.rpcPcDisconnectTimer = null;
-                        if (session.rpcAutoClosed) return;
-                        if (session.pc && session.pc.connectionState === 'disconnected') {
-                            closeRpcShellOrWindow(session, 'webrtc_disconnected_timeout');
-                        }
-                    }, 8000);
-                    return;
-                }
-                if (st === 'connected' || st === 'connecting') {
-                    clearSessionTimer(session, 'rpcPcDisconnectTimer');
-                }
-            });
-
-            peer.ontrack = function (evt) {
-                const t = evt.track;
-                if (!t || t.kind !== 'video') {
-                    return;
-                }
-                /* 切勿对 audio 的 ontrack 写 video.srcObject，否则会覆盖掉已有视频轨（常见 SDP 顺序：先 video 后 audio） */
-                if (session.rpcWindowMode || session.electronCompactLauncher) {
-                    t.addEventListener('ended', function () {
-                        if (!shouldDeferRpcShellCloseUntilVideo(session)) {
-                            exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'video_track_ended');
-                        }
-                    });
-                }
-                if (typeof t.getSettings === 'function') {
-                    try {
-                        const s = t.getSettings();
-                        if (s.width) session.rpcStreamW = s.width;
-                        if (s.height) session.rpcStreamH = s.height;
-                    } catch (_) {}
-                }
-                /* 等待层 z-index 高于 video-stage，需在出画前隐藏，否则一直挡在黑底上 */
-                if (session.rpcWindowMode) {
-                    const splash = doc.getElementById('rpc-window-wait');
-                    if (splash) splash.hidden = true;
-                }
-                showVideoStage(session, doc);
-                const v = getMainVideo(doc);
-                attachStreamToMainVideo(v, new MediaStream([t]));
-            };
-
-            peer.ondatachannel = function (evt) {
-                session.dc = evt.channel;
-                updateDataChannelState(ui, session.dc.readyState);
-                session.dc.onopen = function () {
-                    updateDataChannelState(ui, 'open');
-                    logDataChannel(ui, 'Data channel opened');
-                    latencyDiag.onDataChannelOpen();
-                    try {
-                        session.dc.send(JSON.stringify({ type: 'controlRequest' }));
-                    } catch (_) {}
-                };
-                session.dc.onmessage = function (ev) {
-                    if (typeof ev.data !== 'string') return;
-                    const str = ev.data;
-                    try {
-                        const j0 = JSON.parse(str);
-                        if (j0 && j0.type === 'remoteProcessExited') {
-                            /* 服务端可能在主窗 HWND 瞬时失效时误发退出；轨仍 live 时忽略，改由 track ended 等关窗 */
-                            if (rpcShellCloseAllowed(session) && session.pc) {
-                                try {
-                                    const recvs = session.pc.getReceivers();
-                                    for (let i = 0; i < recvs.length; i++) {
-                                        const tr = recvs[i] && recvs[i].track;
-                                        if (tr && tr.kind === 'video' && tr.readyState === 'live') {
-                                            logDataChannel(ui, '忽略 remoteProcessExited（视频轨仍为 live，可能为窗口重建误报）');
-                                            return;
-                                        }
-                                    }
-                                } catch (_) {}
-                            }
-                            exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'remote_process_exited');
-                            return;
-                        }
-                    } catch (_) {}
-                    if (!latencyDiag.tryHandleMessage(str)) {
-                        logDataChannel(ui, '< ' + str);
-                    }
-                    try {
-                        const j = JSON.parse(str);
-                        if (j && j.type === 'controlGranted') session.isControlEnabled = true;
-                        if (j && (j.type === 'controlDenied' || j.type === 'controlRevoked')) {
-                            session.isControlEnabled = false;
-                        }
-                    } catch (_) {}
-                    if (str.indexOf('Ping') !== -1) {
-                        setTimeout(function () {
-                            if (!session.dc) return;
-                            const message = 'Pong ' + currentTimestamp();
-                            logDataChannel(ui, '> ' + message);
-                            session.dc.send(message);
-                        }, 1000);
-                    }
-                };
-                session.dc.onclose = function () {
-                    updateDataChannelState(ui, 'closed');
-                    logDataChannel(ui, 'Data channel closed');
-                };
-                session.dc.onerror = function (error) {
-                    logDataChannel(ui, 'Data channel error: ' + error);
-                };
-            };
-
-            return peer;
-        }
-
-        function waitGatheringComplete(peer) {
-            return new Promise(function (resolve) {
-                if (peer.iceGatheringState === 'complete') resolve();
-                else {
-                    peer.addEventListener('icegatheringstatechange', function handler() {
-                        if (peer.iceGatheringState === 'complete') {
-                            peer.removeEventListener('icegatheringstatechange', handler);
-                            resolve();
-                        }
-                    });
-                }
-            });
-        }
-
-        function sendAnswer(peer) {
-            return peer.createAnswer().then(function (answer) {
-                return peer.setLocalDescription(answer);
-            }).then(function () {
-                return waitGatheringComplete(peer);
-            }).then(function () {
-                const answer = peer.localDescription;
-                const answerEl = doc.getElementById('answer-sdp');
-                if (answerEl) answerEl.textContent = answer.sdp;
-                session.websocket.send(JSON.stringify({
-                    id: 'server', type: answer.type, sdp: answer.sdp,
-                }));
-            });
-        }
-
-        function handleOffer(message) {
-            session.pc = createPeerConnection();
-            latencyDiag.bindPeer(session.pc);
-            const desc = new RTCSessionDescription({ type: message.type, sdp: message.sdp });
-            return session.pc.setRemoteDescription(desc).then(function () {
-                return sendAnswer(session.pc);
-            });
-        }
-
-        function reattachVideoToMain() {
-            if (!session.pc) return;
-            const v = getMainVideo(doc);
-            const recv = session.pc.getReceivers().find(function (r) {
-                return r.track && r.track.kind === 'video';
-            });
-            if (!recv || !recv.track || !v) return;
-            attachStreamToMainVideo(v, new MediaStream([recv.track]));
-        }
-
-        return { handleOffer: handleOffer, reattachVideoToMain: reattachVideoToMain, attachStreamToMainVideo: attachStreamToMainVideo };
     }
 
     function createSignalingClient(session, doc, ui, callbacks) {
-        const onOffer = callbacks.onOffer;
-        function connect() {
-            try {
-                const wsUrl = buildSignalingWebSocketUrl(session.clientId);
-                console.info('[RemoteProcessControl] 信令 WebSocket:', wsUrl);
-                session.websocket = new WebSocket(wsUrl);
-                updateWebSocketState(ui, 'connecting');
-
-                session.websocket.onopen = function () {
-                    clearSessionTimer(session, 'rpcWsConnectTimer');
-                    updateWebSocketState(ui, 'connected');
-                    const startBtn = doc.getElementById('start');
-                    if (startBtn) startBtn.disabled = false;
-                    logDataChannel(ui, 'WebSocket connected. clientId=' + session.clientId);
-                    if (typeof callbacks.onWebSocketOpen === 'function') {
-                        try {
-                            callbacks.onWebSocketOpen();
-                        } catch (cbErr) {
-                            console.error('[RemoteProcessControl] onWebSocketOpen:', cbErr);
-                        }
-                    }
-                };
-
-                session.websocket.onmessage = function (evt) {
-                    if (typeof evt.data !== 'string') return;
-                    let message;
-                    try {
-                        message = JSON.parse(evt.data);
-                    } catch (parseErr) {
-                        console.warn('[RemoteProcessControl] 非 JSON 信令消息，已忽略:', evt.data, parseErr);
-                        return;
-                    }
-                    if (message.type === 'offer') {
-                        const offerEl = doc.getElementById('offer-sdp');
-                        if (offerEl) offerEl.textContent = message.sdp;
-                        Promise.resolve(onOffer(message)).catch(function (offerErr) {
-                            console.error('[RemoteProcessControl] 处理 offer 失败:', offerErr);
-                            logDataChannel(ui, '处理 offer 失败: ' + (offerErr && offerErr.message ? offerErr.message : offerErr));
-                        });
-                    }
-                };
-
-                session.websocket.onerror = function () {
-                    logDataChannel(ui, 'WebSocket 错误（请确认信令服务已监听 9090，且 HTTPS 页面需使用 WSS 或改为 HTTP 打开前端）');
-                    updateWebSocketState(ui, 'error');
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
-                        window.setTimeout(function () {
-                            if (!shouldDeferRpcShellCloseUntilVideo(session)) {
-                                closeRpcShellOrWindow(session, 'websocket_error');
-                            }
-                        }, 500);
-                    }
-                };
-
-                session.websocket.onclose = function (ev) {
-                    logDataChannel(ui, 'WebSocket closed (code=' + ev.code + (ev.reason ? ', ' + ev.reason : '') + ')');
-                    updateWebSocketState(ui, 'disconnected');
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
-                        window.setTimeout(function () {
-                            if (!shouldDeferRpcShellCloseUntilVideo(session)) {
-                                closeRpcShellOrWindow(session, 'websocket_closed_' + ev.code);
-                            }
-                        }, 400);
-                    }
-                };
-            } catch (e) {
-                logDataChannel(ui, 'Failed to init WebSocket: ' + e);
-                updateWebSocketState(ui, 'error');
-                console.error('[RemoteProcessControl] WebSocket 构造失败:', e);
-            }
+        if (window.__rpcSignaling && typeof window.__rpcSignaling.createSignalingClient === 'function') {
+            return window.__rpcSignaling.createSignalingClient(session, doc, ui, callbacks);
         }
-        return { connect: connect };
+        console.error('[RemoteProcessControl] signalingLayer 未加载，无法创建信令客户端');
+        return { connect: function () {} };
     }
 
     function RemoteProcessApplication(doc) {
@@ -1158,9 +429,44 @@
         this.signaling = null;
     }
 
+    // Export a minimal internal API for pass-through layer files.
+    // Next step will be to physically move code out of this file gradually.
+    function bindLayerExports() {
+        try {
+            window.__rpcInternal = window.__rpcInternal || {};
+            const i = window.__rpcInternal;
+            i.createSignalingClient = createSignalingClient;
+            i.showVideoStage = showVideoStage;
+            i.hideVideoStage = hideVideoStage;
+            i.setupRemoteControl = setupRemoteControl;
+            i.setupStageMouse = setupStageMouse;
+            i.setupKeyboardOnStage = setupKeyboardOnStage;
+            i.applyVideoDisplaySize = applyVideoDisplaySize;
+            // WebRTC controller dependencies (used by webrtcLayer.js)
+            i.onRpcVideoStreamReady = onRpcVideoStreamReady;
+            i.exitVideoPageAfterRemoteStreamEnded = exitVideoPageAfterRemoteStreamEnded;
+            i.rpcShellCloseAllowed = rpcShellCloseAllowed;
+            // Signaling helpers used by signalingLayer.js
+            i.clearSessionTimer = clearSessionTimer;
+            i.logDataChannel = logDataChannel;
+            i.updateWebSocketState = updateWebSocketState;
+            i.shouldDeferRpcShellCloseUntilVideo = shouldDeferRpcShellCloseUntilVideo;
+            i.closeRpcShellOrWindow = closeRpcShellOrWindow;
+
+            if (window.__rpcUI && typeof window.__rpcUI._bindFromInternal === 'function') window.__rpcUI._bindFromInternal();
+            if (window.__rpcWebRtc && typeof window.__rpcWebRtc._bindFromInternal === 'function') window.__rpcWebRtc._bindFromInternal();
+            if (window.__rpcSignaling && typeof window.__rpcSignaling._bindFromInternal === 'function') window.__rpcSignaling._bindFromInternal();
+        } catch (_) {}
+    }
+
     RemoteProcessApplication.prototype.sendRequest = function () {
         const exeEl = this.doc.getElementById('exe-path');
-        const exePath = (exeEl && exeEl.value) ? exeEl.value.trim() : '';
+        const exePath = (this.session && this.session.rpcExePath) ? String(this.session.rpcExePath).trim()
+            : ((exeEl && exeEl.value) ? exeEl.value.trim() : '');
+        if (!exePath) {
+            logDataChannel(this.ui || bindStatusElements(this.doc), 'exePath 为空，无法启动远端应用');
+            return;
+        }
         this.session.websocket.send(JSON.stringify({ id: 'server', type: 'request', exePath: exePath }));
     };
 
@@ -1379,9 +685,31 @@
 
     RemoteProcessApplication.prototype.run = function () {
         this.ui = bindStatusElements(this.doc);
-        this.webrtc = createWebRtcSessionController(this.session, this.doc, this.ui);
+        if (window.__rpcWebRtc && typeof window.__rpcWebRtc.createWebRtcSessionController === 'function') {
+            this.webrtc = window.__rpcWebRtc.createWebRtcSessionController(this.session, this.doc, this.ui);
+        } else {
+            console.error('[RemoteProcessControl] webrtcLayer 未加载，无法创建 WebRTC controller');
+            this.webrtc = null;
+        }
         const self = this;
-        this.signaling = createSignalingClient(this.session, this.doc, this.ui, {
+        if (window.__rpcSignaling && typeof window.__rpcSignaling.createSignalingClient === 'function') {
+            this.signaling = window.__rpcSignaling.createSignalingClient(this.session, this.doc, this.ui, {
+                onOffer: function (msg) {
+                    if (self.webrtc) return self.webrtc.handleOffer(msg);
+                    return Promise.resolve();
+                },
+                onWebSocketOpen: function () {
+                    if (!self.session.rpcAutostart) return;
+                    window.setTimeout(function () {
+                        if (!self.session.websocket || self.session.websocket.readyState !== WebSocket.OPEN) return;
+                        if (!self.session.pc) {
+                            self.start();
+                        }
+                    }, 80);
+                },
+            });
+        } else {
+            this.signaling = createSignalingClient(this.session, this.doc, this.ui, {
             onOffer: function (msg) {
                 if (self.webrtc) return self.webrtc.handleOffer(msg);
                 return Promise.resolve();
@@ -1395,7 +723,8 @@
                     }
                 }, 80);
             },
-        });
+            });
+        }
         this.bindDom();
         /* 紧凑模式且手动双击再连：勿在启动页就开始「信令 10s 未连上关窗」，改到 start() 再计时 */
         const deferWsWatchdog =
@@ -1406,15 +735,39 @@
         this.signaling.connect();
     };
 
+    function startDesktopMode() {
+        // 新版桌面逻辑已拆分到 desktopMode.js（支持 file:// 多文件脚本加载）。
+        try {
+            if (window.__rpcStartDesktopMode && typeof window.__rpcStartDesktopMode === 'function') {
+                window.__rpcStartDesktopMode(document);
+                return;
+            }
+        } catch (_) {}
+
+        console.warn('[desktop] desktopMode.js 未加载，无法启动桌面容器。');
+        return;
+    }
+
+    
+
     function startApp() {
         if (window.__rpcAppStarted) return;
         window.__rpcAppStarted = true;
+        // Ensure layer pass-through files can bind to client.js internals.
+        bindLayerExports();
         try {
-            const app = new RemoteProcessApplication(document);
-            applyRpcWindowUrlFlags(app.session, document);
-            applyElectronShellFlags(app.session, document);
-            window.__rpcApp = app;
-            app.run();
+            const params = new URLSearchParams(window.location.search);
+            const rpcWindow = params.get('rpcWindow') === '1' || params.get('kiosk') === '1';
+            const useLegacyUi = params.get('rpcLegacy') === '1' || params.get('desktop') === '0';
+            if (rpcWindow || useLegacyUi) {
+                const app = new RemoteProcessApplication(document);
+                applyRpcWindowUrlFlags(app.session, document);
+                applyElectronShellFlags(app.session, document);
+                window.__rpcApp = app;
+                app.run();
+            } else {
+                startDesktopMode();
+            }
         } catch (err) {
             console.error('[RemoteProcessControl] 启动失败:', err);
             const pre = document.getElementById('data-channel-log');
@@ -1424,9 +777,12 @@
         }
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startApp, { once: true });
-    } else {
+    // Important:
+    // client.js 依赖后续 defer 脚本（uiLayer/webrtcLayer/signalingLayer）执行完成后再启动。
+    // 当 readyState 为 'interactive' 时直接 startApp() 可能导致 window.__rpcSignaling 尚未就绪。
+    if (document.readyState === 'complete') {
         startApp();
+    } else {
+        document.addEventListener('DOMContentLoaded', startApp, { once: true });
     }
 })();

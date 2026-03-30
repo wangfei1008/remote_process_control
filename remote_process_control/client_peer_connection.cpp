@@ -108,6 +108,20 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
                     dc->send(nlohmann::json({ {"type","controlRevoked"} }).dump());
                     return;
                 }
+                if (type == "requestKeyframe") {
+                    // Receiver asks for a keyframe after sustained loss/jitter.
+                    // Best-effort: force ProcessManager to encode next frame as IDR.
+                    try {
+                        if (m_av_stream.has_value()) {
+                            auto pm = std::dynamic_pointer_cast<ProcessManager>(m_av_stream.value()->m_c_video);
+                            if (pm) {
+                                std::cout << "[keyframe] request_force_keyframe from client=" << clientId << std::endl;
+                                pm->request_force_keyframe();
+                            }
+                        }
+                    } catch (...) {}
+                    return;
+                }
 
                 // ignore input from non-controller
                 if (m_is_controller_callback && !m_is_controller_callback(clientId)) {

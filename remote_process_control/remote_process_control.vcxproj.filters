@@ -15,19 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="screen_capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="h264_encoder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="desktop_capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="ffmpeg_encoder.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="rtp_h264_packer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -48,6 +39,12 @@
     <ClCompile Include="desktop_screen_source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="capture_rgb_heuristics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="h264_avcc_utils.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="process_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -65,19 +62,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="screen_capture.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="h264_encoder.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="desktop_capture.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ffmpeg_encoder.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="rtp_h264_packer.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="webrtc_socket.h">
@@ -95,7 +83,16 @@
     <ClInclude Include="desktop_screen_source.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="capture_rgb_heuristics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h264_avcc_utils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="process_manager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_time.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="window_capture.h">

@@ -3,3 +3,4 @@
 /signaling-server-qt/tmp
 /x64
 /cpp_receiver/x64
+*.log

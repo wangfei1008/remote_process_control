@@ -1,12 +1,18 @@
 #include "window_capture.h"
 
+// PW_CLIENTONLY isn't available on some older SDK headers.
+#ifndef PW_CLIENTONLY
+#define PW_CLIENTONLY 0x00000001
+#endif
+
 std::vector<uint8_t> WindowCapture::capture(HWND hwnd, int width, int height)
 {
     std::vector<uint8_t> buffer;
     if (!hwnd) return buffer;
 
    // SetForegroundWindow(hwnd);
-	HDC hWindowDC = GetWindowDC(hwnd);//GetDC(hwnd);
+    // Use client DC to keep fallback BitBlt aligned with client-sized capture.
+    HDC hWindowDC = GetDC(hwnd);
     HDC hMemDC = CreateCompatibleDC(hWindowDC);
     HBITMAP hBitmap = CreateCompatibleBitmap(hWindowDC, width, height);
     HGDIOBJ oldBitmap = SelectObject(hMemDC, hBitmap);
@@ -14,7 +20,11 @@ std::vector<uint8_t> WindowCapture::capture(HWND hwnd, int width, int height)
     // Copy window content into a memory DC.
     //BitBlt(hMemDC, 0, 0, width, height, hWindowDC, 0, 0, SRCCOPY | CAPTUREBLT);
     // Prefer PrintWindow for better compatibility across window types.
-    BOOL ok = PrintWindow(hwnd, hMemDC, PW_RENDERFULLCONTENT);
+    // IMPORTANT: we capture with (width,height) that comes from client-rect.
+    // Using PW_RENDERFULLCONTENT with client dimensions can misalign content and
+    // produce black bars, so we only try client-only first and otherwise fall back
+    // to BitBlt (still aligned to the provided client-sized bitmap).
+    BOOL ok = PrintWindow(hwnd, hMemDC, PW_CLIENTONLY);
     if (!ok) {
         BitBlt(hMemDC, 0, 0, width, height, hWindowDC, 0, 0, SRCCOPY | CAPTUREBLT);
     }

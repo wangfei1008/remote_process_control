@@ -5,7 +5,8 @@
 #include "desktop_capture.hpp"
 #include "h264_encoder.hpp"
 
-class DesktopScreenSource : public StreamSource {
+class DesktopScreenSource : public StreamSource 
+{
     std::optional<std::vector<std::byte>> previousUnitType5 = std::nullopt;
     std::optional<std::vector<std::byte>> previousUnitType7 = std::nullopt;
     std::optional<std::vector<std::byte>> previousUnitType8 = std::nullopt;
@@ -22,7 +23,7 @@ public:
     std::vector<std::byte> initial_nalus();
 private:
 	AVCodecContext* m_av_codec_ctx = nullptr;
-    DesktopCapture capture;
+    DesktopCapture m_capture;
     rtc::binary sample;
     uint64_t sampleTime_us = 0;
     int64_t m_encode_frame_seq = 0;

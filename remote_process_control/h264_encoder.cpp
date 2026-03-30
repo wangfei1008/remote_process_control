@@ -19,43 +19,68 @@
 
 // Convert Annex-B bytestream into length-prefixed NAL units.
 static void annexb_to_length_prefixed(const uint8_t* src, size_t src_size, std::vector<uint8_t>& out) {
-    auto is_start_code_at = [&](size_t pos, size_t& sc_len) -> bool {
-        if (pos + 3 >= src_size) return false;
-        if (src[pos] == 0 && src[pos + 1] == 0) {
-            if (src[pos + 2] == 1) { sc_len = 3; return true; }
-            if (pos + 4 < src_size && src[pos + 2] == 0 && src[pos + 3] == 1) { sc_len = 4; return true; }
+    out.clear();
+    if (!src || src_size == 0) return;
+
+    auto find_start_code = [&](size_t from, size_t& sc_pos, size_t& sc_len) -> bool {
+        for (size_t i = from; i + 2 < src_size; ++i) {
+            // 00 00 01
+            if (src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 1) {
+                sc_pos = i;
+                sc_len = 3;
+                return true;
+            }
+            // 00 00 00 01
+            if (i + 3 < src_size &&
+                src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 0 && src[i + 3] == 1) {
+                sc_pos = i;
+                sc_len = 4;
+                return true;
+            }
         }
         return false;
     };
 
-    size_t i = 0;
-    while (i + 3 < src_size) {
-        // Find start code.
-        size_t start = i;
-        size_t sc_len = 0;
-        while (start + 3 < src_size && !is_start_code_at(start, sc_len)) {
-            ++start;
-        }
-        if (start + 3 >= src_size) break;
+    size_t sc_pos = 0, sc_len = 0;
+    if (!find_start_code(0, sc_pos, sc_len)) return;
 
-        const size_t nalu_start = start + sc_len;
-        // Find next start code.
-        size_t nalu_end = nalu_start;
-        size_t next_sc_len = 0;
-        while (nalu_end + 3 < src_size && !is_start_code_at(nalu_end, next_sc_len)) {
-            ++nalu_end;
-        }
-        if (nalu_end > src_size) nalu_end = src_size;
+    while (true) {
+        const size_t nalu_start = sc_pos + sc_len;
+        if (nalu_start >= src_size) break;
 
-        const size_t nalu_size = (nalu_end > nalu_start) ? (nalu_end - nalu_start) : 0;
-        if (nalu_size > 0) {
+        size_t next_sc_pos = 0, next_sc_len = 0;
+        const bool has_next = find_start_code(nalu_start, next_sc_pos, next_sc_len);
+        size_t nalu_end = has_next ? next_sc_pos : src_size;
+
+        // Trim trailing zero padding before next start code.
+        while (nalu_end > nalu_start && src[nalu_end - 1] == 0) {
+            --nalu_end;
+        }
+
+        if (nalu_end > nalu_start) {
+            const size_t nalu_size = nalu_end - nalu_start;
             uint32_t len_be = htonl(static_cast<uint32_t>(nalu_size));
-            out.insert(out.end(), reinterpret_cast<uint8_t*>(&len_be), reinterpret_cast<uint8_t*>(&len_be) + 4);
-            out.insert(out.end(), src + nalu_start, src + nalu_start + nalu_size);
+            out.insert(out.end(),
+                       reinterpret_cast<uint8_t*>(&len_be),
+                       reinterpret_cast<uint8_t*>(&len_be) + 4);
+            out.insert(out.end(), src + nalu_start, src + nalu_end);
         }
 
-        i = nalu_end;
+        if (!has_next) break;
+        sc_pos = next_sc_pos;
+        sc_len = next_sc_len;
     }
+}
+
+static bool contains_annexb_start_code(const uint8_t* src, size_t src_size) {
+    if (!src || src_size < 3) return false;
+    for (size_t i = 0; i + 2 < src_size; ++i) {
+        // 00 00 01
+        if (src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 1) return true;
+        // 00 00 00 01
+        if (i + 3 < src_size && src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 0 && src[i + 3] == 1) return true;
+    }
+    return false;
 }
 
 namespace {
@@ -63,8 +88,12 @@ struct EncoderCache {
     SwsContext* sws_ctx = nullptr;
     AVFrame* rgb_frame = nullptr;
     AVFrame* yuv_frame = nullptr;
-    int width = 0;
-    int height = 0;
+    // src: provided RGB24 size
+    int src_width = 0;
+    int src_height = 0;
+    // dst: encoder ctx size (fixed)
+    int dst_width = 0;
+    int dst_height = 0;
 };
 
 std::mutex g_cache_mtx;
@@ -80,11 +109,15 @@ void free_encoder_cache(AVCodecContext* ctx) {
     g_encoder_cache.erase(it);
 }
 
-bool ensure_encoder_cache(AVCodecContext* ctx, int width, int height) {
-    if (!ctx || width <= 0 || height <= 0) return false;
+bool ensure_encoder_cache(AVCodecContext* ctx, int srcW, int srcH) {
+    if (!ctx || srcW <= 0 || srcH <= 0) return false;
+    const int dstW = ctx->width;
+    const int dstH = ctx->height;
+    if (dstW <= 0 || dstH <= 0) return false;
     auto& cache = g_encoder_cache[ctx];
     if (cache.sws_ctx && cache.rgb_frame && cache.yuv_frame &&
-        cache.width == width && cache.height == height) {
+        cache.src_width == srcW && cache.src_height == srcH &&
+        cache.dst_width == dstW && cache.dst_height == dstH) {
         return true;
     }
 
@@ -92,12 +125,14 @@ bool ensure_encoder_cache(AVCodecContext* ctx, int width, int height) {
     if (cache.rgb_frame) av_frame_free(&cache.rgb_frame);
     if (cache.yuv_frame) av_frame_free(&cache.yuv_frame);
     cache = {};
-    cache.width = width;
-    cache.height = height;
+    cache.src_width = srcW;
+    cache.src_height = srcH;
+    cache.dst_width = dstW;
+    cache.dst_height = dstH;
 
     cache.sws_ctx = sws_getContext(
-        width, height, AV_PIX_FMT_RGB24,
-        width, height, AV_PIX_FMT_YUV420P,
+        srcW, srcH, AV_PIX_FMT_RGB24,
+        dstW, dstH, AV_PIX_FMT_YUV420P,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (!cache.sws_ctx) return false;
 
@@ -106,12 +141,12 @@ bool ensure_encoder_cache(AVCodecContext* ctx, int width, int height) {
     if (!cache.rgb_frame || !cache.yuv_frame) return false;
 
     cache.rgb_frame->format = AV_PIX_FMT_RGB24;
-    cache.rgb_frame->width = width;
-    cache.rgb_frame->height = height;
+    cache.rgb_frame->width = srcW;
+    cache.rgb_frame->height = srcH;
 
     cache.yuv_frame->format = AV_PIX_FMT_YUV420P;
-    cache.yuv_frame->width = width;
-    cache.yuv_frame->height = height;
+    cache.yuv_frame->width = dstW;
+    cache.yuv_frame->height = dstH;
     if (av_frame_get_buffer(cache.yuv_frame, 32) < 0) return false;
 
     return true;
@@ -140,13 +175,17 @@ std::vector<std::pair<std::string, const AVCodec*>> build_codec_candidates()
     } else if (mode == "amf") {
         push("amf", byName("h264_amf"));
     } else if (mode == "sw") {
+        // Strict software preference: do not fallback to generic "h264" here,
+        // because on Windows that commonly maps to h264_mf and reintroduces
+        // hardware/MFT-specific instability.
         push("libx264", byName("libx264"));
-        push("h264", byId());
+        push("openh264", byName("libopenh264"));
     } else {
         push("nvenc", byName("h264_nvenc"));
         push("qsv", byName("h264_qsv"));
         push("amf", byName("h264_amf"));
         push("libx264", byName("libx264"));
+        push("openh264", byName("libopenh264"));
         push("h264", byId());
     }
     return out;
@@ -167,13 +206,16 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
         ctx->height = height;
         ctx->time_base = { 1, fp };
         ctx->framerate = { fp, 1 };
-        ctx->gop_size = std::max<int>(1, fp);
+        // Keep GOP reasonably long to avoid frequent bitrate spikes and visible flicker.
+        // Too-short GOP (e.g. IDR every few frames) can cause periodic pulsing even on LAN.
+        ctx->gop_size = std::max<int>(24, fp);
         ctx->max_b_frames = 0;
         ctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
         const int64_t px = static_cast<int64_t>(width) * static_cast<int64_t>(height);
-        int64_t br = px * 7LL;
-        br = std::max<int64_t>(2500000LL, std::min<int64_t>(20000000LL, br));
+        // Be conservative with bitrate to avoid receiver decode drops under jitter.
+        int64_t br = px * 5LL;
+        br = std::max<int64_t>(1800000LL, std::min<int64_t>(12000000LL, br));
         ctx->bit_rate = static_cast<int>(br);
         ctx->rc_max_rate = static_cast<int>(std::min<int64_t>(24000000LL, br + br / 3));
         ctx->rc_buffer_size = static_cast<int>(std::max<int64_t>(500000LL, br / 2));
@@ -230,6 +272,7 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
     if (!ctx || !rgb_data) return false;
 
     std::scoped_lock lk(g_cache_mtx);
+    // Treat width/height as SRC size; sws will scale to ctx->width/height (DST).
     if (!ensure_encoder_cache(ctx, width, height)) return false;
     auto& cache = g_encoder_cache[ctx];
 
@@ -240,12 +283,15 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
 
     // 2. RGB -> YUV420P
     yuv_frame->pts = frame_seq++;
-    // Force an IDR on GOP boundaries, first frame, resolution changes, or explicit request.
+    // Force IDR only when needed: first frame or explicit request.
+    // Let encoder follow gop_size for periodic keyframes to keep cadence stable.
     {
-        const int gop = std::max<int>(1, ctx->gop_size);
-        if (force_keyframe || yuv_frame->pts == 0 || (yuv_frame->pts % gop) == 0) {
+        if (force_keyframe || yuv_frame->pts == 0) {
             yuv_frame->pict_type = AV_PICTURE_TYPE_I;
             yuv_frame->key_frame = 1;
+        } else {
+            yuv_frame->pict_type = AV_PICTURE_TYPE_NONE;
+            yuv_frame->key_frame = 0;
         }
     }
     if (av_frame_make_writable(yuv_frame) < 0) {
@@ -270,10 +316,14 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
     }
     ret = avcodec_receive_packet(ctx, &pkt);
     if (ret == 0) {
-        // Convert output into length-prefixed NAL units.
+        // Some encoders output Annex-B, some output AVCC (length-prefixed).
+        // Detect Annex-B by scanning the whole packet, not only packet head.
+        // Some backends may prepend bytes before the first start code.
         out.clear();
-        annexb_to_length_prefixed(pkt.data, pkt.size, out);
-        // Fallback: if conversion fails, keep raw packet payload.
+        if (pkt.data && pkt.size > 0 && contains_annexb_start_code(pkt.data, static_cast<size_t>(pkt.size))) {
+            annexb_to_length_prefixed(pkt.data, pkt.size, out);
+        }
+        // Keep raw payload for AVCC output or conversion fallback.
         if (out.empty() && pkt.data && pkt.size > 0) {
             out.assign(pkt.data, pkt.data + pkt.size);
         }

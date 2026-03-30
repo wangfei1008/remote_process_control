@@ -1,22 +1,15 @@
 #include "process_manager.h"
 #include "input_controller.h"
-#include <tlhelp32.h>
+#include "rpc_time.h"
+#include "capture_rgb_heuristics.h"
+#include "h264_avcc_utils.h"
 #include <cstdint>
 #include <vector>
-#include <thread>
 #include <chrono>
 #include <iostream>
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
-
-static uint64_t rpc_unix_epoch_ms()
-{
-    using namespace std::chrono;
-    return static_cast<uint64_t>(
-        duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
-}
 
 static bool rpc_probe_dxgi_capture_support()
 {
@@ -28,61 +21,43 @@ static bool rpc_probe_dxgi_capture_support()
     return ok;
 }
 
-// Parse H264 avcC extradata into length-prefixed SPS/PPS NAL units.
-// Output format: [uint32_be length][nalu bytes]...
-static std::optional<std::vector<std::byte>> parse_avcc_spspps(const AVCodecContext* ctx)
+bool ProcessManager::should_apply_layout_change(int capturedW, int capturedH)
 {
-    if (!ctx || !ctx->extradata || ctx->extradata_size <= 0) return std::nullopt;
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(ctx->extradata);
-    const size_t size = static_cast<size_t>(ctx->extradata_size);
-    if (size < 7) return std::nullopt;
-    if (p[0] != 1) return std::nullopt; // configurationVersion
+    if (capturedW <= 0 || capturedH <= 0) return false;
+    if (m_width <= 0 || m_height <= 0) return true;
+    // Once we have produced valid video, lock encoder resolution to avoid
+    // frontend/cpp_receiver letterbox recalculation causing visible flicker.
+    if (m_had_successful_video) return false;
 
-    size_t off = 5;
-    if (off >= size) return std::nullopt;
-
-    const uint8_t numSps = p[off] & 0x1F;
-    off += 1;
-
-    std::vector<std::byte> out;
-    auto append_nalu = [&](const uint8_t* nalu, size_t naluSize) {
-        if (!nalu || naluSize == 0) return;
-        const uint32_t len = static_cast<uint32_t>(naluSize);
-        const uint32_t len_be =
-            (len & 0x000000FFu) << 24 |
-            (len & 0x0000FF00u) << 8 |
-            (len & 0x00FF0000u) >> 8 |
-            (len & 0xFF000000u) >> 24;
-        const std::byte* lenBytes = reinterpret_cast<const std::byte*>(&len_be);
-        out.insert(out.end(), lenBytes, lenBytes + 4);
-        const std::byte* dataBytes = reinterpret_cast<const std::byte*>(nalu);
-        out.insert(out.end(), dataBytes, dataBytes + naluSize);
-    };
-
-    for (uint8_t i = 0; i < numSps; ++i) {
-        if (off + 2 > size) return std::nullopt;
-        const uint16_t spsLen = (uint16_t(p[off]) << 8) | uint16_t(p[off + 1]);
-        off += 2;
-        if (off + spsLen > size) return std::nullopt;
-        append_nalu(p + off, spsLen);
-        off += spsLen;
+    const int dw = std::abs(capturedW - m_width);
+    const int dh = std::abs(capturedH - m_height);
+    const bool diffEnough = (dw > m_layout_change_threshold_px) || (dh > m_layout_change_threshold_px);
+    if (!diffEnough) {
+        reset_layout_change_tracking();
+        return false;
     }
 
-    if (off + 1 > size) return std::nullopt;
-    const uint8_t numPps = p[off];
-    off += 1;
-
-    for (uint8_t i = 0; i < numPps; ++i) {
-        if (off + 2 > size) return std::nullopt;
-        const uint16_t ppsLen = (uint16_t(p[off]) << 8) | uint16_t(p[off + 1]);
-        off += 2;
-        if (off + ppsLen > size) return std::nullopt;
-        append_nalu(p + off, ppsLen);
-        off += ppsLen;
+    if (m_pending_layout_w != capturedW || m_pending_layout_h != capturedH) {
+        m_pending_layout_w = capturedW;
+        m_pending_layout_h = capturedH;
+        m_layout_change_streak = 1;
+    } else {
+        ++m_layout_change_streak;
     }
 
-    if (out.empty()) return std::nullopt;
-    return out;
+    if (m_layout_change_streak >= m_layout_change_required_streak) {
+        // Caller will recreate encoder and update m_width/m_height.
+        reset_layout_change_tracking();
+        return true;
+    }
+    return false;
+}
+
+void ProcessManager::reset_layout_change_tracking()
+{
+    m_layout_change_streak = 0;
+    m_pending_layout_w = 0;
+    m_pending_layout_h = 0;
 }
 
 ProcessManager::ProcessManager() 
@@ -113,16 +88,31 @@ ProcessManager::ProcessManager()
     if (const char* envCaptureBackend = std::getenv("RPC_CAPTURE_BACKEND")) {
         std::string mode = envCaptureBackend;
         std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (mode == "dxgi") m_hw_capture_requested = true;
-        else if (mode == "gdi") m_hw_capture_requested = false;
-        else m_hw_capture_requested = m_hw_capture_supported; // auto
+        if (mode == "dxgi") {
+            m_hw_capture_requested = true;
+            m_lock_capture_backend = true;
+            m_locked_use_hw_capture = true;
+        } else if (mode == "gdi") {
+            m_hw_capture_requested = false;
+            m_lock_capture_backend = true;
+            m_locked_use_hw_capture = false;
+        } else {
+            m_hw_capture_requested = m_hw_capture_supported; // auto
+            m_lock_capture_backend = false;
+        }
     } else {
         m_hw_capture_requested = m_hw_capture_supported; // default auto
+        m_lock_capture_backend = false;
+    }
+    if (const char* envRebind = std::getenv("RPC_ALLOW_CAPTURE_PID_REBIND")) {
+        m_allow_pid_rebind_by_exename = (std::atoi(envRebind) != 0);
     }
     m_hw_capture_active = (m_hw_capture_requested && m_hw_capture_supported);
     std::cout << "[capture] dxgi_supported=" << (m_hw_capture_supported ? 1 : 0)
               << " requested=" << (m_hw_capture_requested ? 1 : 0)
               << " active=" << (m_hw_capture_active ? 1 : 0)
+              << " lock=" << (m_lock_capture_backend ? 1 : 0)
+              << " locked_backend=" << (m_locked_use_hw_capture ? "dxgi" : "gdi")
               << " mode=" << (m_capture_all_windows ? "all-windows" : "main-window")
               << std::endl;
 }
@@ -168,35 +158,13 @@ HWND ProcessManager::find_window_by_exe_basename(const std::string& exeBaseName)
         int area = 0;
     } best;
 
-    EnumWindows([](HWND hwnd, LPARAM lParam)->BOOL {
-        auto* best = reinterpret_cast<Best*>(lParam);
-        if (!IsWindowVisible(hwnd)) return TRUE;
-        if (GetWindow(hwnd, GW_OWNER) != NULL) return TRUE;
+    struct EnumCtx {
+        const char* target;
+        Best* best;
+    } ctx{ target.c_str(), &best };
 
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
-        if (!pid) return TRUE;
-
-        char title[2] = {0};
-        GetWindowTextA(hwnd, title, 1); // only check non-empty quickly
-        // allow empty title too; don't filter here
-
-        std::string base = ProcessManager::get_process_basename(pid);
-        if (base.empty()) return TRUE;
-
-        // compare
-        // NOTE: we cannot capture 'target' inside callback, so we'll store it in window property
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&best));
-
-    // The above EnumWindows cannot capture 'target' (lambda is converted to function pointer).
-    // Use a static to pass target for this call (single-thread usage is fine here).
-    struct TargetCtx { const char* target; Best* best; };
-    static TargetCtx* s_ctx = nullptr;
-    TargetCtx ctx{ target.c_str(), &best };
-    s_ctx = &ctx;
-    EnumWindows([](HWND hwnd, LPARAM)->BOOL {
-        if (!s_ctx) return FALSE;
+    EnumWindows([](HWND hwnd, LPARAM lp)->BOOL {
+        auto* c = reinterpret_cast<EnumCtx*>(lp);
         if (!IsWindowVisible(hwnd)) return TRUE;
         if (GetWindow(hwnd, GW_OWNER) != NULL) return TRUE;
 
@@ -213,16 +181,15 @@ HWND ProcessManager::find_window_by_exe_basename(const std::string& exeBaseName)
         std::string base = ProcessManager::get_process_basename(pid);
         if (base.empty()) return TRUE;
 
-        if (base != s_ctx->target) return TRUE;
+        if (base != c->target) return TRUE;
 
         const int area = w * h;
-        if (area > s_ctx->best->area) {
-            s_ctx->best->area = area;
-            s_ctx->best->hwnd = hwnd;
+        if (area > c->best->area) {
+            c->best->area = area;
+            c->best->hwnd = hwnd;
         }
         return TRUE;
-    }, 0);
-    s_ctx = nullptr;
+    }, reinterpret_cast<LPARAM>(&ctx));
 
     return best.hwnd;
 }
@@ -256,29 +223,21 @@ HWND ProcessManager::launch_process(const std::string& exe_path)
         auto wins = find_all_windows(m_pi.dwProcessId);
         if (!wins.empty()) m_mainWindow = wins.front();
     }
-    RECT rect;
-    if (GetWindowRect(m_mainWindow, &rect))
-    {
-  //      POINT pt = { rect.left, rect.top };
-  //      ClientToScreen(m_mainWindow, &pt);
-		//rect.left = pt.x;
-		//rect.top = pt.y;
-  //      pt = { rect.right, rect.bottom };
-  //      ClientToScreen(m_mainWindow, &pt);
-		//rect.right = pt.x;
-		//rect.bottom = pt.y;
-		//rect.bottom = pt.y;
-        m_width = rect.right - rect.left;
-        m_height = rect.bottom - rect.top;
+    // Use client rect to reduce 1~2px jitter caused by non-client area (borders/shadows).
+    RECT clientRc{};
+    if (GetClientRect(m_mainWindow, &clientRc)) {
+        POINT tl{ clientRc.left, clientRc.top };
+        POINT br{ clientRc.right, clientRc.bottom };
+        if (ClientToScreen(m_mainWindow, &tl) && ClientToScreen(m_mainWindow, &br)) {
+            m_width = br.x - tl.x;
+            m_height = br.y - tl.y;
+        }
+    }
 
-
-        // Enforce even dimensions for YUV420 encoding.
+    // Enforce even dimensions for YUV420 encoding.
+    if (m_width > 0 && m_height > 0) {
         m_width = (m_width + 1) & ~1;
-		m_height = (m_height + 1) & ~1; // keep height even
-  //      m_width = (m_width + 3) & ~3;
-  //      m_height = (m_height + 3) & ~3;
-  //      m_width = 820;
-  //      m_height = 620;
+        m_height = (m_height + 1) & ~1; // keep height even
     }
     m_av_codec_ctx = create_h264_encoder(m_width, m_height, m_fps);
     m_extradata_spspps = parse_avcc_spspps(m_av_codec_ctx);
@@ -312,17 +271,67 @@ void ProcessManager::terminate()
 void ProcessManager::start()
 {
     running = true;
+    m_had_successful_video = false;
+    m_exit_notified = false;
+    m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 15000; // allow PID rebound only in startup window
+    m_window_missing_since_unix_ms = 0;
     sampleTime_us = 0;
     m_encode_frame_seq = 0;
     m_stable_frame_count = 0;
     m_has_last_sig = false;
     m_last_frame_sig = 0;
     m_current_fps = m_active_fps;
+    reset_layout_change_tracking();
+    m_last_good_sample.clear();
+    m_have_last_good_sample = false;
+    m_last_good_rgb_frame.clear();
+    m_last_good_rgb_w = 0;
+    m_last_good_rgb_h = 0;
+    m_pending_force_keyframe.store(false);
+    m_last_force_keyframe_unix_ms.store(0, std::memory_order_relaxed);
+    m_force_software_capture_until_unix_ms.store(0, std::memory_order_relaxed);
+    m_dxgi_fail_streak = 0;
+    m_top_black_strip_streak = 0;
+    m_disable_dxgi_for_session = false;
+    m_last_capture_used_hw = false;
+    m_dxgi_instability_score = 0;
 }
 
 void ProcessManager::stop()
 {
-    running = false;
+    // Strong lifecycle guarantee:
+    // when upper layer stops stream (frontend closed stream/page),
+    // the launched process must be terminated and resources released.
+    terminate();
+}
+
+void ProcessManager::request_force_keyframe()
+{
+    // Best-effort recovery for packet loss/jitter: make next encoded frame an IDR/keyframe.
+    request_force_keyframe_with_cooldown();
+}
+
+void ProcessManager::request_force_keyframe_with_cooldown()
+{
+    // Cooldown prevents repeatedly forcing IDR during sustained capture glitches.
+    // Frequent IDR forcing can trigger decoder spikes, showing as flicker/black bars.
+    constexpr uint64_t kCooldownMs = 3000; // 3s
+
+    const uint64_t nowMs = rpc_unix_epoch_ms();
+    while (true) {
+        const uint64_t lastAllowedMs = m_last_force_keyframe_unix_ms.load(std::memory_order_relaxed);
+        if (lastAllowedMs != 0 && nowMs >= lastAllowedMs && (nowMs - lastAllowedMs) < kCooldownMs) {
+            return; // still in cooldown window
+        }
+
+        uint64_t expected = lastAllowedMs;
+        if (m_last_force_keyframe_unix_ms.compare_exchange_weak(
+                expected, nowMs, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            m_pending_force_keyframe.store(true, std::memory_order_relaxed);
+            return;
+        }
+        // CAS failed due to race; retry.
+    }
 }
 
 void ProcessManager::notify_remote_exit()
@@ -370,17 +379,22 @@ std::vector<uint8_t> ProcessManager::capture_main_window_image(HWND hwnd, int& o
     outMinLeft = 0;
     outMinTop = 0;
     if (!hwnd || !IsWindow(hwnd)) return {};
-    RECT rect{};
-    if (!GetWindowRect(hwnd, &rect)) return {};
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
+    RECT clientRc{};
+    if (!GetClientRect(hwnd, &clientRc)) return {};
+
+    POINT tl{ clientRc.left, clientRc.top };
+    POINT br{ clientRc.right, clientRc.bottom };
+    if (!ClientToScreen(hwnd, &tl) || !ClientToScreen(hwnd, &br)) return {};
+
+    const int width = br.x - tl.x;
+    const int height = br.y - tl.y;
     if (width <= 0 || height <= 0) return {};
     auto frame = m_windowCapture.capture(hwnd, width, height);
     if (frame.empty()) return {};
     outWidth = width & ~1;
     outHeight = height & ~1;
-    outMinLeft = rect.left;
-    outMinTop = rect.top;
+    outMinLeft = tl.x;
+    outMinTop = tl.y;
     if (outWidth <= 0 || outHeight <= 0) return {};
     if (outWidth != width || outHeight != height) {
         std::vector<uint8_t> cropped(static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 3u, 0);
@@ -394,20 +408,15 @@ std::vector<uint8_t> ProcessManager::capture_main_window_image(HWND hwnd, int& o
     return frame;
 }
 
-void ProcessManager::load_next_sample()
+bool ProcessManager::tick_window_and_health(std::chrono::steady_clock::time_point& last_no_window_diag)
 {
-    if (!running)
-        return;
-
     if (m_had_successful_video && !m_exit_notified) {
         if (m_capturePid != 0) {
             HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_capturePid);
             if (hProc) {
                 DWORD code = STILL_ACTIVE;
                 if (GetExitCodeProcess(hProc, &code) && code != STILL_ACTIVE) {
-                    CloseHandle(hProc);
-                    notify_remote_exit();
-                    return;
+                    m_mainWindow = nullptr;
                 }
                 CloseHandle(hProc);
             }
@@ -417,7 +426,6 @@ void ProcessManager::load_next_sample()
         }
     }
 
-    static auto lastDiag = std::chrono::steady_clock::now();
     if (!m_mainWindow) {
         m_mainWindow = find_main_window(m_capturePid);
         if (!m_mainWindow) {
@@ -432,7 +440,11 @@ void ProcessManager::load_next_sample()
                 m_mainWindow = wins.front();
         }
 
-        if (!m_mainWindow && !m_targetExeBaseName.empty()) {
+        if (m_allow_pid_rebind_by_exename &&
+            !m_had_successful_video &&
+            !m_mainWindow &&
+            !m_targetExeBaseName.empty() &&
+            rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms) {
             HWND h = find_window_by_exe_basename(m_targetExeBaseName);
             if (h) {
                 DWORD realPid = 0;
@@ -445,57 +457,292 @@ void ProcessManager::load_next_sample()
         }
 
         if (!m_mainWindow) {
-            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-            if (now - lastDiag > std::chrono::seconds(1)) {
-                lastDiag = now;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_no_window_diag > std::chrono::seconds(1)) {
+                last_no_window_diag = now;
                 std::vector<HWND> wins = find_all_windows(m_capturePid);
                 std::cout << "[proc] no window yet, pid=" << m_capturePid
                           << " windows=" << wins.size() << std::endl;
             }
             sample.clear();
+
+            const uint64_t nowMs = rpc_unix_epoch_ms();
+            if (m_window_missing_since_unix_ms == 0) {
+                m_window_missing_since_unix_ms = nowMs;
+            }
+            if (m_had_successful_video &&
+                nowMs >= m_window_missing_since_unix_ms &&
+                (nowMs - m_window_missing_since_unix_ms) >= static_cast<uint64_t>(m_window_missing_exit_grace_ms)) {
+                notify_remote_exit();
+                return false;
+            }
             sampleTime_us += get_sample_duration_us();
-            return;
+            return false;
         }
+        m_pid_rebind_deadline_unix_ms = 0;
+        m_window_missing_since_unix_ms = 0;
     }
+    return true;
+}
 
-    int width = 0, height = 0;
-    int capMinLeft = 0, capMinTop = 0;
-    const std::chrono::steady_clock::time_point t_cap_begin = std::chrono::steady_clock::now();
+void ProcessManager::emit_hold_or_empty_sample(bool request_idr)
+{
+    const bool steadyFrameHold = (m_lock_capture_backend && !m_locked_use_hw_capture);
+    if (steadyFrameHold && m_have_last_good_sample) {
+        sample = m_last_good_sample;
+        if (request_idr) request_force_keyframe_with_cooldown();
+    } else {
+        sample.clear();
+    }
+}
 
-    std::vector<uint8_t> frame;
-    if (m_hw_capture_active) {
+bool ProcessManager::decide_use_hw_capture(uint64_t cap_now_ms)
+{
+    const uint64_t forceSwUntil = m_force_software_capture_until_unix_ms.load(std::memory_order_relaxed);
+    bool useHwCapture = false;
+    if (m_lock_capture_backend) {
+        useHwCapture = m_hw_capture_supported && m_locked_use_hw_capture;
+    } 
+    else {
+        useHwCapture = m_hw_capture_active && !m_disable_dxgi_for_session && (cap_now_ms >= forceSwUntil);
+    }
+    m_last_capture_used_hw = useHwCapture;
+    return useHwCapture;
+}
+
+bool ProcessManager::grab_rgb_frame(int& width, int& height, int& cap_min_left, int& cap_min_top, std::vector<uint8_t>& frame, bool use_hw_capture)
+{
+    if (use_hw_capture) {
         if (m_capture_all_windows) {
-            // Current DXGI path is optimized for single-window low-latency capture.
-            // Keep multi-window mode on existing compositor path.
-            frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
-        } else {
-            frame = m_dxgiCapture.capture_window_rgb(m_mainWindow, width, height, capMinLeft, capMinTop);
+            frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, cap_min_left, cap_min_top);
+        } 
+        else {
+            frame = m_dxgiCapture.capture_window_rgb(m_mainWindow, width, height, cap_min_left, cap_min_top);
             if (frame.empty()) {
-                // Runtime fallback if desktop duplication temporarily fails.
-                frame = capture_main_window_image(m_mainWindow, width, height, capMinLeft, capMinTop);
+                m_dxgi_fail_streak++;
+                m_dxgi_instability_score = (std::min)(m_dxgi_instability_score + 2, 1000);
+                if (m_dxgi_fail_streak >= m_dxgi_fail_reset_threshold) {
+                    m_dxgiCapture.reset();
+                    m_dxgi_fail_streak = 0;
+                    std::cout << "[capture] dxgi repeated empty, reset duplication\n";
+                }
+                static auto lastDxgiFailLog = std::chrono::steady_clock::now();
+                const auto now = std::chrono::steady_clock::now();
+                if (now - lastDxgiFailLog > std::chrono::seconds(1)) {
+                    lastDxgiFailLog = now;
+                    std::cout << "[capture] dxgi returned empty\n";
+                }
+                if (!m_lock_capture_backend) {
+                    m_force_software_capture_until_unix_ms.store(
+                        rpc_unix_epoch_ms() + static_cast<uint64_t>(m_capture_degrade_ms),
+                        std::memory_order_relaxed);
+                    if (!m_disable_dxgi_for_session &&
+                        m_dxgi_instability_score >= m_dxgi_disable_score_threshold) {
+                        m_disable_dxgi_for_session = true;
+                        std::cout << "[capture] dxgi disabled for this session due to repeated instability score="
+                                  << m_dxgi_instability_score << "\n";
+                    }
+                }
+                if (!m_lock_capture_backend) {
+                    frame = capture_main_window_image(m_mainWindow, width, height, cap_min_left, cap_min_top);
+                    if (frame.empty() && m_had_successful_video && m_have_last_good_sample) {
+                        emit_hold_or_empty_sample(true);
+                        sampleTime_us += get_sample_duration_us();
+                        return false;
+                    }
+                }
+            } else {
+                m_dxgi_fail_streak = 0;
+                if (m_dxgi_instability_score > 0) {
+                    m_dxgi_instability_score = (std::max)(0, m_dxgi_instability_score - 1);
+                }
             }
         }
-    } else if (m_capture_all_windows) {
-        frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, capMinLeft, capMinTop);
+    } 
+    else if (m_capture_all_windows) {
+        frame = capture_all_windows_image(m_capturePid, m_mainWindow, 1024, width, height, cap_min_left, cap_min_top);
     } else {
-        frame = capture_main_window_image(m_mainWindow, width, height, capMinLeft, capMinTop);
+        frame = capture_main_window_image(m_mainWindow, width, height, cap_min_left, cap_min_top);
+    }
+    return true;
+}
+
+bool ProcessManager::discard_if_capture_too_slow(std::chrono::steady_clock::time_point t_cap_begin,
+                                                 std::chrono::steady_clock::time_point t_after_cap,
+                                                 bool use_hw_capture)
+{
+    if (!(m_had_successful_video && m_have_last_good_sample))
+        return false;
+    const auto capMs = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(t_after_cap - t_cap_begin).count());
+    constexpr int kMaxCaptureMs = 80;
+    if (capMs < kMaxCaptureMs)
+        return false;
+
+    static auto lastSlowLog = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastSlowLog > std::chrono::seconds(1)) {
+        lastSlowLog = now;
+        std::cout << "[capture] slow capture " << capMs << "ms, discard frame\n";
+    }
+    if (use_hw_capture && !m_lock_capture_backend) {
+        m_dxgi_instability_score = (std::min)(m_dxgi_instability_score + 1, 1000);
+        m_force_software_capture_until_unix_ms.store(
+            rpc_unix_epoch_ms() + static_cast<uint64_t>(m_capture_degrade_ms), std::memory_order_relaxed);
+        if (!m_disable_dxgi_for_session &&
+            m_dxgi_instability_score >= m_dxgi_disable_score_threshold) {
+            m_disable_dxgi_for_session = true;
+            std::cout << "[capture] dxgi disabled for this session due to repeated slow-capture score="
+                      << m_dxgi_instability_score << "\n";
+        }
+    }
+    emit_hold_or_empty_sample(false);
+    sampleTime_us += get_sample_duration_us();
+    m_last_capture_ms = static_cast<uint32_t>(capMs);
+    m_last_encode_ms = 0;
+    return true;
+}
+
+bool ProcessManager::discard_if_empty_frame(const std::vector<uint8_t>& frame, int width, int height)
+{
+    if (!frame.empty() && width > 0 && height > 0)
+        return false;
+    emit_hold_or_empty_sample(true);
+    sampleTime_us += get_sample_duration_us();
+    return true;
+}
+
+bool ProcessManager::filter_suspicious_frame(std::vector<uint8_t>& frame, int& width, int& height, int& cap_min_left,
+                                            int& cap_min_top)
+{
+    if (!(m_had_successful_video && m_have_last_good_sample))
+        return true;
+
+    const bool hasTopBlackStrip = capture_rgb::frame_has_top_black_strip_rgb24(frame, width, height);
+    bool suspicious = capture_rgb::is_suspicious_capture_frame(frame, width, height);
+    if (hasTopBlackStrip) {
+        const bool canRepairWithPrev =
+            (!m_last_good_rgb_frame.empty() &&
+             m_last_good_rgb_w == width &&
+             m_last_good_rgb_h == height &&
+             m_last_good_rgb_frame.size() == frame.size());
+        if (canRepairWithPrev) {
+            capture_rgb::repair_top_strip_from_previous(frame, width, height, m_last_good_rgb_frame);
+            suspicious = capture_rgb::is_suspicious_capture_frame(frame, width, height);
+        }
+        ++m_top_black_strip_streak;
+        if (m_hw_capture_active) {
+            constexpr uint64_t kLongForceSwMs = 8000;
+            m_force_software_capture_until_unix_ms.store(
+                rpc_unix_epoch_ms() + kLongForceSwMs, std::memory_order_relaxed);
+        }
+        if (!m_disable_dxgi_for_session &&
+            m_top_black_strip_streak >= m_top_black_strip_disable_dxgi_threshold) {
+            m_disable_dxgi_for_session = true;
+            std::cout << "[capture] dxgi disabled for this session due to repeated top black strip\n";
+        }
+    } else if (m_top_black_strip_streak > 0) {
+        --m_top_black_strip_streak;
     }
 
-    const std::chrono::steady_clock::time_point t_after_cap = std::chrono::steady_clock::now();
-    if (frame.empty() || width <= 0 || height <= 0) {
-        sample.clear();
+    if (suspicious && m_hw_capture_active && !m_capture_all_windows && m_mainWindow && IsWindow(m_mainWindow)) {
+        int sw = 0, sh = 0, sl = 0, st = 0;
+        auto fallbackFrame = capture_main_window_image(m_mainWindow, sw, sh, sl, st);
+        if (!fallbackFrame.empty() && sw > 0 && sh > 0 &&
+            !capture_rgb::is_suspicious_capture_frame(fallbackFrame, sw, sh)) {
+            frame.swap(fallbackFrame);
+            width = sw;
+            height = sh;
+            cap_min_left = sl;
+            cap_min_top = st;
+            suspicious = false;
+            static auto lastRecoverLog = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastRecoverLog > std::chrono::seconds(1)) {
+                lastRecoverLog = now;
+                std::cout << "[capture] suspicious dxgi frame recovered by software recapture\n";
+            }
+        }
+    }
+
+    if (suspicious && m_hw_capture_active && !m_capture_all_windows && m_mainWindow && IsWindow(m_mainWindow) &&
+        m_top_black_strip_streak >= m_top_black_strip_force_sw_threshold) {
+        int sw = 0, sh = 0, sl = 0, st = 0;
+        auto swFrame = capture_main_window_image(m_mainWindow, sw, sh, sl, st);
+        if (!swFrame.empty() && sw > 0 && sh > 0 &&
+            !capture_rgb::is_suspicious_capture_frame(swFrame, sw, sh)) {
+            frame.swap(swFrame);
+            width = sw;
+            height = sh;
+            cap_min_left = sl;
+            cap_min_top = st;
+            suspicious = false;
+        }
+    }
+
+    if (suspicious) {
+        static auto lastBadLog = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastBadLog > std::chrono::seconds(1)) {
+            lastBadLog = now;
+            std::cout << "[capture] suspicious frame detected, discard frame\n";
+        }
+        emit_hold_or_empty_sample(true);
         sampleTime_us += get_sample_duration_us();
-        return;
+        return false;
+    }
+    return true;
+}
+
+void ProcessManager::ensure_encoder_layout(int captured_w, int captured_h, bool& applied_layout_out)
+{
+    applied_layout_out = false;
+    if (!m_av_codec_ctx) {
+        m_width = captured_w;
+        m_height = captured_h;
+        m_av_codec_ctx = create_h264_encoder(m_width, m_height, m_fps);
+        m_extradata_spspps = parse_avcc_spspps(m_av_codec_ctx);
+        m_encode_frame_seq = 0;
+        reset_layout_change_tracking();
+        applied_layout_out = true;
+    } else if (should_apply_layout_change(captured_w, captured_h)) {
+        if (m_av_codec_ctx) {
+            destroy_h264_encoder(m_av_codec_ctx);
+            m_av_codec_ctx = nullptr;
+        }
+        m_width = captured_w;
+        m_height = captured_h;
+        m_encode_frame_seq = 0;
+        m_av_codec_ctx = create_h264_encoder(m_width, m_height, m_fps);
+        m_extradata_spspps = parse_avcc_spspps(m_av_codec_ctx);
+        applied_layout_out = true;
     }
 
-    const uint64_t sig = quick_frame_signature(frame, width, height);
+    if (applied_layout_out) {
+        static auto lastLayoutLog = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastLayoutLog > std::chrono::seconds(1)) {
+            lastLayoutLog = now;
+            std::cout << "[layout] encoder updated: captured=" << captured_w << "x" << captured_h
+                      << " -> target=" << m_width << "x" << m_height
+                      << std::endl;
+        }
+    }
+}
+
+void ProcessManager::update_fps_pacing_and_mapping(const std::vector<uint8_t>& frame, int captured_w, int captured_h,
+                                                   int cap_min_left, int cap_min_top)
+{
+    const uint64_t sig = quick_frame_signature(frame, captured_w, captured_h);
     const bool frameChanged = (!m_has_last_sig || sig != m_last_frame_sig);
     m_last_frame_sig = sig;
     m_has_last_sig = true;
 
     const uint64_t nowMs = rpc_unix_epoch_ms();
     const uint64_t lastInputMs = InputController::last_input_activity_ms();
-    const bool recentInput = (lastInputMs > 0 && nowMs >= lastInputMs && (nowMs - lastInputMs) <= static_cast<uint64_t>(m_recent_input_boost_ms));
+    const bool recentInput =
+        (lastInputMs > 0 && nowMs >= lastInputMs &&
+         (nowMs - lastInputMs) <= static_cast<uint64_t>(m_recent_input_boost_ms));
 
     if (frameChanged || recentInput) {
         m_stable_frame_count = 0;
@@ -507,31 +754,54 @@ void ProcessManager::load_next_sample()
         }
     }
 
-    const bool layout_changed = (width != m_width || height != m_height);
-    if (layout_changed) {
-        if (m_av_codec_ctx) {
-            destroy_h264_encoder(m_av_codec_ctx);
-            m_av_codec_ctx = nullptr;
-        }
-        m_encode_frame_seq = 0;
-        m_width = width;
-        m_height = height;
-        m_av_codec_ctx = create_h264_encoder(m_width, m_height, m_fps);
-        m_extradata_spspps = parse_avcc_spspps(m_av_codec_ctx);
-    }
+    InputController::instance()->set_capture_screen_rect(cap_min_left, cap_min_top, captured_w, captured_h);
+    m_last_good_rgb_frame = frame;
+    m_last_good_rgb_w = captured_w;
+    m_last_good_rgb_h = captured_h;
+}
 
-    InputController::instance()->set_capture_screen_rect(capMinLeft, capMinTop, m_width, m_height);
-
+void ProcessManager::finalize_encode_rgb(std::vector<uint8_t>& frame, int captured_w, int captured_h,
+                                         std::chrono::steady_clock::time_point t_cap_begin,
+                                         std::chrono::steady_clock::time_point t_after_cap, bool applied_layout)
+{
     std::vector<uint8_t> h264_data;
-    const std::chrono::steady_clock::time_point t_enc_begin = std::chrono::steady_clock::now();
-    bool ok = encode_rgb(m_av_codec_ctx, frame.data(), m_width, m_height, m_encode_frame_seq, h264_data,
-                         layout_changed);
-    const std::chrono::steady_clock::time_point t_enc_end = std::chrono::steady_clock::now();
+    const auto t_enc_begin = std::chrono::steady_clock::now();
+    const bool forceKeyframe = applied_layout || m_pending_force_keyframe.load();
+    bool ok = encode_rgb(m_av_codec_ctx, frame.data(), captured_w, captured_h, m_encode_frame_seq, h264_data, forceKeyframe);
+    const auto t_enc_end = std::chrono::steady_clock::now();
 
     if (ok && !h264_data.empty()) {
-        // rtc::binary is std::vector<std::byte>; cannot construct from uint8_t iterators (C2440).
+        if (!validate_h264_avcc_payload(h264_data.data(), h264_data.size())) {
+            static auto lastInvalidEncLog = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastInvalidEncLog > std::chrono::seconds(1)) {
+                lastInvalidEncLog = now;
+                std::cout << "[encode] invalid h264 avcc payload, drop frame\n";
+            }
+            if (m_have_last_good_sample) {
+                sample = m_last_good_sample;
+                request_force_keyframe_with_cooldown();
+            } else {
+                sample.clear();
+            }
+            sampleTime_us += get_sample_duration_us();
+            return;
+        }
+
         const std::byte* p = reinterpret_cast<const std::byte*>(h264_data.data());
         sample.assign(p, p + h264_data.size());
+
+        bool hasIdr = false, hasSps = false, hasPps = false;
+        inspect_h264_avcc_sample(sample, hasIdr, hasSps, hasPps);
+        if (hasIdr && (!hasSps || !hasPps) && m_extradata_spspps.has_value()) {
+            const auto& spspps = m_extradata_spspps.value();
+            rtc::binary patched;
+            patched.reserve(spspps.size() + sample.size());
+            patched.insert(patched.end(), spspps.begin(), spspps.end());
+            patched.insert(patched.end(), sample.begin(), sample.end());
+            sample.swap(patched);
+        }
+
         sampleTime_us += get_sample_duration_us();
 
         m_last_capture_ms = static_cast<uint32_t>(
@@ -540,11 +810,50 @@ void ProcessManager::load_next_sample()
             std::chrono::duration_cast<std::chrono::milliseconds>(t_enc_end - t_enc_begin).count());
         m_last_frame_unix_ms = rpc_unix_epoch_ms();
         m_had_successful_video = true;
+        m_last_good_sample = sample;
+        m_have_last_good_sample = true;
+        m_pending_force_keyframe.store(false);
     } else {
-        // Even on encoding failure or empty output, advance timeline and clear sample to avoid repeated sendFrame.
-        sample.clear();
+        if (m_have_last_good_sample) {
+            sample = m_last_good_sample;
+            request_force_keyframe_with_cooldown();
+        } else {
+            sample.clear();
+        }
         sampleTime_us += get_sample_duration_us();
     }
+}
+
+void ProcessManager::load_next_sample()
+{
+    if (!running) return;
+
+    static auto last_no_window_diag = std::chrono::steady_clock::now();
+    if (!tick_window_and_health(last_no_window_diag)) return;
+
+    int width = 0, height = 0;
+    int cap_min_left = 0, cap_min_top = 0;
+    const auto t_cap_begin = std::chrono::steady_clock::now();
+
+    const uint64_t cap_now_ms = rpc_unix_epoch_ms();
+    const bool use_hw_capture = decide_use_hw_capture(cap_now_ms);
+
+    std::vector<uint8_t> frame;
+    if (!grab_rgb_frame(width, height, cap_min_left, cap_min_top, frame, use_hw_capture)) return;
+
+    const auto t_after_cap = std::chrono::steady_clock::now();
+    if (discard_if_capture_too_slow(t_cap_begin, t_after_cap, use_hw_capture))
+        return;
+    if (discard_if_empty_frame(frame, width, height))
+        return;
+    if (!filter_suspicious_frame(frame, width, height, cap_min_left, cap_min_top))
+        return;
+
+    bool applied_layout = false;
+    ensure_encoder_layout(width, height, applied_layout);
+
+    update_fps_pacing_and_mapping(frame, width, height, cap_min_left, cap_min_top);
+    finalize_encode_rgb(frame, width, height, t_cap_begin, t_after_cap, applied_layout);
 }
 
 rtc::binary ProcessManager::get_sample()
@@ -559,8 +868,10 @@ uint64_t ProcessManager::get_sample_time_us()
 
 uint64_t ProcessManager::get_sample_duration_us()
 {
-    if (m_current_fps > 0)
-        return 1000000ull / static_cast<uint64_t>(m_current_fps);
+    // Keep a stable RTP time axis.
+    // Variable pacing (idle fps changes) tends to increase jitter-buffer build-up
+    // on the browser receiver, which can manifest as visible flicker/black frames.
+    if (m_fps > 0) return 1000000ull / static_cast<uint64_t>(m_fps);
     return 0;
 }
 
@@ -637,16 +948,25 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
     // 2) Capture image data for each collected window.
     std::vector<WindowInfo> windows;
     for (HWND hwnd : hwnds) {
-        RECT rect;
-        if (GetWindowRect(hwnd, &rect)) {
-            int width = rect.right - rect.left;
-            int height = rect.bottom - rect.top;
-            if (width > 0 && height > 0) {
-                std::vector<uint8_t> img = m_windowCapture.capture(hwnd, width, height);
-                if (!img.empty())
-                    windows.push_back({ hwnd, rect, std::move(img) });
-            }
-        }
+        RECT clientRc{};
+        if (!GetClientRect(hwnd, &clientRc)) continue;
+        POINT tl{ clientRc.left, clientRc.top };
+        POINT br{ clientRc.right, clientRc.bottom };
+        if (!ClientToScreen(hwnd, &tl) || !ClientToScreen(hwnd, &br)) continue;
+
+        const int width = br.x - tl.x;
+        const int height = br.y - tl.y;
+        if (width <= 0 || height <= 0) continue;
+
+        std::vector<uint8_t> img = m_windowCapture.capture(hwnd, width, height);
+        if (img.empty()) continue;
+
+        RECT rect{};
+        rect.left = tl.x;
+        rect.top = tl.y;
+        rect.right = tl.x + width;
+        rect.bottom = tl.y + height;
+        windows.push_back({ hwnd, rect, std::move(img) });
     }
     if (windows.empty()) {
         outWidth = 0;
@@ -674,13 +994,18 @@ std::vector<uint8_t> ProcessManager::capture_all_windows_image(DWORD pid, HWND a
     clipRect.bottom = maxBottom;
     if (anchorHwnd && IsWindow(anchorHwnd) && maxBelowMainPx > 0) {
         RECT ar{};
-        if (GetWindowRect(anchorHwnd, &ar)) {
-            const LONG capBottom = ar.bottom + static_cast<LONG>(maxBelowMainPx);
-            if (clipRect.bottom > capBottom) {
-                clipRect.bottom = capBottom;
-            }
-            if (clipRect.bottom <= clipRect.top) {
-                clipRect.bottom = clipRect.top + 2;
+        RECT arClient{};
+        if (GetClientRect(anchorHwnd, &arClient)) {
+            POINT atl{ arClient.left, arClient.top };
+            POINT abr{ arClient.right, arClient.bottom };
+            if (ClientToScreen(anchorHwnd, &atl) && ClientToScreen(anchorHwnd, &abr)) {
+                ar.left = atl.x;
+                ar.top = atl.y;
+                ar.right = abr.x;
+                ar.bottom = abr.y;
+                const LONG capBottom = ar.bottom + static_cast<LONG>(maxBelowMainPx);
+                if (clipRect.bottom > capBottom) clipRect.bottom = capBottom;
+                if (clipRect.bottom <= clipRect.top) clipRect.bottom = clipRect.top + 2;
             }
         }
     }

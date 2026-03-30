@@ -13,6 +13,12 @@ DXGICapture::~DXGICapture()
     reset_duplication();
 }
 
+void DXGICapture::reset()
+{
+    // Reset duplication state so next capture will re-acquire frames.
+    reset_duplication();
+}
+
 bool DXGICapture::init()
 {
     UINT flags = 0;
@@ -191,9 +197,18 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     if (!m_available || !hwnd || !IsWindow(hwnd)) return {};
     if (!ensure_output_for_window(hwnd)) return {};
 
-    RECT wr{};
-    if (!GetWindowRect(hwnd, &wr)) return {};
-    RECT clipped = wr;
+    // Use client rect to reduce borders/shadows causing 1~2px jitter.
+    RECT clientRc{};
+    if (!GetClientRect(hwnd, &clientRc)) return {};
+    POINT tl{ clientRc.left, clientRc.top };
+    POINT br{ clientRc.right, clientRc.bottom };
+    if (!ClientToScreen(hwnd, &tl) || !ClientToScreen(hwnd, &br)) return {};
+
+    RECT clipped{};
+    clipped.left = tl.x;
+    clipped.top = tl.y;
+    clipped.right = br.x;
+    clipped.bottom = br.y;
     clipped.left = (std::max)(clipped.left, m_output_rect.left);
     clipped.top = (std::max)(clipped.top, m_output_rect.top);
     clipped.right = (std::min)(clipped.right, m_output_rect.right);

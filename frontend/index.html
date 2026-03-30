@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Remote Process Control</title>
     <link rel="stylesheet" href="style.css">
-	<script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <!-- adapter.js 外链在部分网络环境会失败（ERR_EMPTY_RESPONSE），先禁用以避免影响主流程 -->
 </head>
 <body>
     <!-- Electron 无边框时左侧窄条可拖动窗口（出画后显示） -->
@@ -96,6 +96,10 @@
                         <span class="status-value" id="data-channel-state">disconnected</span>
                         <span class="status-indicator" id="data-channel-indicator"></span>
                     </div>
+                    <div class="status-item">
+                        <span class="status-label">Capture Health:</span>
+                        <span class="status-value" id="capture-health-state">waiting...</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -140,7 +144,13 @@
         </div>
     </div>
 
-    <!-- 单文件 client.js：支持 file:// 双击打开；Chrome 禁止从 file 加载 ES Module 多文件 -->
+    <!-- Desktop Container：使用普通 script，支持 file:// -->
+    <script src="./desktopMode.js" defer></script>
+    <!-- client.js：支持 file:// 双击打开 -->
     <script src="./client.js" defer></script>
+    <!-- 拆分后的三层入口（pass-through，会从 client.js 的内部导出绑定） -->
+    <script src="./uiLayer.js" defer></script>
+    <script src="./webrtcLayer.js" defer></script>
+    <script src="./signalingLayer.js" defer></script>
 </body>
 </html>

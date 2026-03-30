@@ -1648,7 +1648,7 @@ int main(int argc, char** argv) {
 
 	try {
 		// Increase verbosity to catch media-handler exceptions (RTP depacketizer).
-		rtc::InitLogger(rtc::LogLevel::Verbose);
+		rtc::InitLogger(rtc::LogLevel::Info);
 		EnsureD3D(g_hwnd);
 		UpdateLetterboxRect();
 	} catch (const std::exception& e) {
