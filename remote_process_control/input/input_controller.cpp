@@ -22,7 +22,7 @@ void InputController::ensure_process_dpi_awareness()
 	static bool done = false;
 	if (done) return;
 	done = true;
-	// Win10 1703+: PER_MONITOR_AWARE_V2 aligns window rect / capture / SetCursorPos.
+	// 在 Win10 1703+ 下，PER_MONITOR_AWARE_V2 可对齐窗口矩形/采集/SetCursorPos。
 	using SetCtxFn = BOOL(WINAPI*)(HANDLE);
 	using DpiCtx = HANDLE;
 	const DpiCtx PER_MONITOR_AWARE_V2 = reinterpret_cast<DpiCtx>(static_cast<LONG_PTR>(-4));
@@ -104,7 +104,7 @@ void InputController::bring_mouse_target_foreground()
 
 void InputController::move_mouse_to_screen_pixel(int screen_x, int screen_y)
 {
-	// Coordinate mapping relies on capture/window rects and process DPI awareness being aligned.
+	// 坐标映射依赖采集矩形、窗口矩形与进程 DPI 感知保持一致。
 	if (::SetCursorPos(screen_x, screen_y))
 		return;
 
@@ -139,9 +139,9 @@ void InputController::simulate_mouse_move(int x, int y)
 void InputController::simulate_mouse_move(int x, int y, int abs_x, int abs_y, int video_width, int video_height)
 {
 	note_input_activity();
-	// Prefer merged capture rect; else main window GetWindowRect
+	// 优先使用合并采集矩形，否则退回主窗口 GetWindowRect
 	if (video_width > 0 && video_height > 0 && m_cap_w > 0 && m_cap_h > 0) {
-		// Pixel-center normalization to match frontend mapping
+		// 使用像素中心归一化以匹配前端映射
 		const double fx = std::max(0.0, std::min(1.0,
 			(static_cast<double>(abs_x) + 0.5) / static_cast<double>(video_width)));
 		const double fy = std::max(0.0, std::min(1.0,
@@ -233,7 +233,7 @@ void InputController::simulate_mouse_double_click(int button, int x, int y)
 	note_input_activity();
 	simulate_mouse_down(button, x, y);
 	simulate_mouse_up(button, x, y);
-	Sleep(50); // Short delay between clicks
+	Sleep(50); // 点击之间的短延时
 	simulate_mouse_down(button, x, y);
 	simulate_mouse_up(button, x, y);
 }
@@ -243,7 +243,7 @@ void InputController::simulate_mouse_wheel(int delta_x, int delta_y, int x, int 
 	note_input_activity();
 	bring_mouse_target_foreground();
 
-	// Scale frontend wheel delta to Windows WHEEL_DELTA units (120).
+	// 将前端滚轮增量缩放到 Windows WHEEL_DELTA 单位（120）。
 	const int WHEEL = static_cast<int>(WHEEL_DELTA);
 	auto scaleWheel = [WHEEL](int d) -> int {
 		if (d == 0) return 0;
@@ -307,7 +307,7 @@ void InputController::simulate_key_down(int key, int code, int key_code, int shi
     if (shift_key) simulate_key_press(VK_SHIFT); 
     if (ctrl_key)  simulate_key_press(VK_CONTROL); 
     if (alt_key)   simulate_key_press(VK_MENU);
-	// Map frontend Meta to the Windows key (LWIN) when needed.
+	// 需要时将前端 Meta 映射为 Windows 键（LWIN）。
 	if (meta_key && key_code != VK_LWIN && key_code != VK_RWIN) simulate_key_press(VK_LWIN);
     simulate_key_press(key_code);
 }

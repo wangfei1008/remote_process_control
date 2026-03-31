@@ -1,10 +1,9 @@
 /**
- * libdatachannel streamer example
- * Copyright (c) 2020 Filip Klembara (in2core)
+ * 基于 libdatachannel 的推流示例
+ * 版权所有 (c) 2020 Filip Klembara (in2core)
  *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ * 本源码受 Mozilla Public License v2.0 约束。
+ * 若未随文件附带 MPL 副本，可在 https://mozilla.org/MPL/2.0/ 获取。
  */
 
 #ifndef dispatchqueue_hpp
@@ -24,14 +23,14 @@ public:
     DispatchQueue(std::string name, size_t threadCount = 1);
     ~DispatchQueue();
 
-    // dispatch and copy
+    // 分发任务（拷贝）
     void dispatch(const fp_t& op);
-    // dispatch and move
+    // 分发任务（移动）
     void dispatch(fp_t&& op);
 
     void remove_pending();
 
-    // Deleted operations
+    // 禁用拷贝/移动语义
     DispatchQueue(const DispatchQueue& rhs) = delete;
     DispatchQueue& operator=(const DispatchQueue& rhs) = delete;
     DispatchQueue(DispatchQueue&& rhs) = delete;

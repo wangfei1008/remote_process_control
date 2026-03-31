@@ -40,7 +40,7 @@ RemoteProcessStreamSource::RemoteProcessStreamSource()
     {
         std::string mode = runtime_config::get_string("RPC_CAPTURE_BACKEND", "");
         if (mode.empty()) {
-            m_hw_capture_requested = m_hw_capture_supported; // default auto
+            m_hw_capture_requested = m_hw_capture_supported; // 默认自动模式
             m_lock_capture_backend = false;
         } else {
         std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -53,7 +53,7 @@ RemoteProcessStreamSource::RemoteProcessStreamSource()
             m_lock_capture_backend = true;
             m_locked_use_hw_capture = false;
         } else {
-            m_hw_capture_requested = m_hw_capture_supported; // auto
+            m_hw_capture_requested = m_hw_capture_supported; // 自动模式
             m_lock_capture_backend = false;
         }
         }
@@ -93,18 +93,18 @@ HWND RemoteProcessStreamSource::launch_process(const std::string& exe_path)
                                                  m_targetExeBaseName)) {
         return nullptr;
     }
-    // Use window rect (including non-client area like title bar/borders) so
-    // DXGI and GDI capture produce consistent output regions.
+    // 使用窗口矩形（含标题栏/边框等非客户区），
+    // 确保 DXGI 与 GDI 采集区域一致。
     RECT winRc{};
     if (window_rect_utils::get_effective_window_rect(m_mainWindow, winRc)) {
         m_width = winRc.right - winRc.left;
         m_height = winRc.bottom - winRc.top;
     }
 
-    // Enforce even dimensions for YUV420 encoding.
+    // 为 YUV420 编码强制使用偶数分辨率。
     if (m_width > 0 && m_height > 0) {
         m_width = (m_width + 1) & ~1;
-        m_height = (m_height + 1) & ~1; // keep height even
+        m_height = (m_height + 1) & ~1; // 高度保持偶数
     }
     m_video_encode_pipeline.initialize_encoder(m_width, m_height);
     std::cout << "[proc] launch_process done, hasWindow=" << (m_mainWindow ? 1 : 0) << std::endl;
@@ -123,7 +123,7 @@ void RemoteProcessStreamSource::start()
     m_running = true;
     m_had_successful_video = false;
     m_exit_notified = false;
-    m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 15000; // allow PID rebound only in startup window
+    m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 15000; // 仅在启动窗口期允许 PID 重绑定
     m_window_missing_since_unix_ms = 0;
     m_sample_output_state.reset_for_stream_start();
     m_last_good_rgb_frame.clear();
@@ -137,15 +137,15 @@ void RemoteProcessStreamSource::start()
 
 void RemoteProcessStreamSource::stop()
 {
-    // Strong lifecycle guarantee:
-    // when upper layer stops stream (frontend closed stream/page),
-    // the launched process must be terminated and resources released.
+    // 强生命周期保证：
+    // 当上层停止流（前端关闭页面/流）时，
+    // 必须终止已拉起进程并释放资源。
     terminate();
 }
 
 void RemoteProcessStreamSource::request_force_keyframe()
 {
-    // Best-effort recovery for packet loss/jitter: make next encoded frame an IDR/keyframe.
+    // 针对丢包/抖动做尽力恢复：让下一编码帧成为 IDR 关键帧。
     m_video_encode_pipeline.request_force_keyframe_with_cooldown(rpc_unix_epoch_ms());
 }
 
@@ -437,9 +437,9 @@ uint64_t RemoteProcessStreamSource::get_sample_time_us()
 
 uint64_t RemoteProcessStreamSource::get_sample_duration_us()
 {
-    // Keep a stable RTP time axis.
-    // Variable pacing (idle fps changes) tends to increase jitter-buffer build-up
-    // on the browser receiver, which can manifest as visible flicker/black frames.
+    // 保持稳定的 RTP 时间轴。
+    // 可变节奏（空闲 FPS 变化）会增加浏览器端抖动缓冲堆积，
+    // 可能表现为可见闪烁或黑帧。
     if (m_fps > 0) return 1000000ull / static_cast<uint64_t>(m_fps);
     return 0;
 }

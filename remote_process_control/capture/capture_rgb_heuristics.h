@@ -9,4 +9,4 @@ bool frame_has_top_black_strip_rgb24(const std::vector<uint8_t>& rgb, int width,
 bool is_suspicious_capture_frame(const std::vector<uint8_t>& rgb, int width, int height);
 void repair_top_strip_from_previous(std::vector<uint8_t>& rgb, int width, int height,
                                     const std::vector<uint8_t>& prev_rgb);
-} // namespace capture_rgb
+} 

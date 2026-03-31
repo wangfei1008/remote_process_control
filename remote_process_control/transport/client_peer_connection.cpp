@@ -49,8 +49,8 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
 
     auto dc = m_peer_connection->createDataChannel("ping-pong");
     const std::string clientId = m_id;
-    // Try to grant control as soon as the DataChannel opens and send controlGranted.
-    // This avoids races when relying only on a frontend controlRequest message.
+    // 数据通道打开后尽快尝试授予控制权并发送 controlGranted。
+    // 这样可以避免仅依赖前端 controlRequest 时的竞态。
 
     dc->onOpen([clientId, wdc = make_weak_ptr(dc), this]() {
         if (auto ch = wdc.lock()) {
@@ -72,7 +72,7 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
 			std::cout << "DataChannel message from " << clientId << ": " << msg << std::endl;
             try {                
                     if (msg.find("Pong") != -1) {
-                        dc->send("Ping");// Just a pong response, ignore					
+                        dc->send("Ping");// 仅为 Pong 响应，直接忽略					
                         return;
                     }
 
@@ -104,8 +104,8 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
                     return;
                 }
                 if (type == "requestKeyframe") {
-                    // Receiver asks for a keyframe after sustained loss/jitter.
-                    // Best-effort: force stream source to encode next frame as IDR.
+                    // 接收端在持续丢包/抖动后请求关键帧。
+                    // 尽力处理：强制流源将下一帧编码为 IDR。
                     try {
                         if (m_av_stream.has_value()) {
                             auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(m_av_stream.value()->m_c_video);
@@ -118,7 +118,7 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
                     return;
                 }
 
-                // ignore input from non-controller
+                // 忽略非控制者输入
                 if (m_is_controller_callback && !m_is_controller_callback(clientId)) {
                     return;
                 }
@@ -183,17 +183,17 @@ void ClientPeerConnection::_add_video(const uint8_t payloadType, const uint32_t 
     video.addSSRC(ssrc, cname, msid, cname);
     auto track = m_peer_connection->addTrack(video);
 
-    // create RTP configuration
+    // 创建 RTP 配置
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(ssrc, cname, payloadType, rtc::H264RtpPacketizer::ClockRate);
-    // create packetizer
+    // 创建打包器
     auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::Length, rtpConfig);
-    // add RTCP SR handler
+    // 添加 RTCP SR 处理器
     auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
     packetizer->addToChain(srReporter);
-    // add RTCP NACK handler
+    // 添加 RTCP NACK 处理器
     auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
     packetizer->addToChain(nackResponder);
-    // set handler
+    // 设置处理链
     track->setMediaHandler(packetizer);
 
     track->onOpen(onOpen);
@@ -208,17 +208,17 @@ void ClientPeerConnection::_add_audio(const uint8_t payloadType, const uint32_t 
     audio.addSSRC(ssrc, cname, msid, cname);
     auto track = m_peer_connection->addTrack(audio);
 
-    // create RTP configuration
+    // 创建 RTP 配置
     auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(ssrc, cname, payloadType, rtc::OpusRtpPacketizer::DefaultClockRate);
-    // create packetizer
+    // 创建打包器
     auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
-    // add RTCP SR handler
+    // 添加 RTCP SR 处理器
     auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
     packetizer->addToChain(srReporter);
-    // add RTCP NACK handler
+    // 添加 RTCP NACK 处理器
     auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
     packetizer->addToChain(nackResponder);
-    // set handler
+    // 设置处理链
     track->setMediaHandler(packetizer);
 
     track->onOpen(onOpen);
@@ -237,14 +237,14 @@ void ClientPeerConnection::_add_to_stream(bool is_adding_video)
     else if ((get_state() == ClientPeerConnection::State::WaitingForAudio && !is_adding_video)
         || (get_state() == ClientPeerConnection::State::WaitingForVideo && is_adding_video)) 
     {
-        // Audio and video tracks are collected now
+        // 音视频轨道已就绪
         assert(m_video.has_value() && m_audio.has_value());
         auto video = m_video.value();
 
         set_state(ClientPeerConnection::State::Ready);
         std::cout << "[track] client=" << m_id << " state -> Ready" << std::endl;
 
-        // Immediately start stream once ready (avoid relying on a second state read).
+        // 就绪后立即启动流（避免依赖第二次状态读取）。
         _start_stream();
         return;
     }
@@ -260,7 +260,7 @@ void ClientPeerConnection::_start_stream()
     if (m_av_stream.has_value()) {
         stream = m_av_stream.value();
         if (stream->m_c_is_running) {
-            // stream is already running
+            // 流已在运行
             std::cout << "[stream] already running client=" << m_id << std::endl;
             return;
         }
@@ -339,7 +339,7 @@ void ClientPeerConnection::_handle_mouse_wheel(const nlohmann::json& json)
 
 static int json_get_windows_vk(const nlohmann::json& json)
 {
-	// Frontend "key"/"code" fields are strings; avoid value("key", 0) to prevent type_error drops.
+	// 前端 "key"/"code" 字段是字符串，避免使用 value("key", 0) 导致 type_error 丢包。
 	if (json.contains("vk")) {
 		try {
 			const auto& jv = json["vk"];

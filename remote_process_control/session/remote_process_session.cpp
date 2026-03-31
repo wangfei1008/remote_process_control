@@ -52,7 +52,7 @@ bool RemoteProcessSession::launch_process(const std::string& exe_path,
     out_launch_pid = out_process_info.dwProcessId;
     out_capture_pid = out_launch_pid;
 
-    // Do not block stream creation waiting for window.
+    // 不要因等待窗口而阻塞流创建。
     out_main_window = find_main_window(out_process_info.dwProcessId);
     if (!out_main_window) {
         auto windows = find_all_windows(out_process_info.dwProcessId);

@@ -42,5 +42,5 @@ inline bool get_effective_window_rect(HWND hwnd, RECT& out_rect)
     return true;
 }
 
-}  // namespace window_rect_utils
+} 
 

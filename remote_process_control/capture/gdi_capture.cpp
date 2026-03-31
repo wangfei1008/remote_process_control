@@ -1,7 +1,7 @@
 #include "capture/gdi_capture.h"
 #include "common/window_rect_utils.h"
 
-// PW_CLIENTONLY isn't available on some older SDK headers.
+// 某些旧版 SDK 头文件中没有 PW_CLIENTONLY。
 #ifndef PW_CLIENTONLY
 #define PW_CLIENTONLY 0x00000001
 #endif
@@ -34,8 +34,8 @@ std::vector<uint8_t> GdiCapture::capture(HWND hwnd, int width, int height, bool 
     int srcY = 0;
 
     if (includeNonClient) {
-        // Prefer screen-rect copy for full window area. This consistently includes
-        // title bar/borders for windows where WindowDC/PrintWindow may return client-only.
+        // 全窗口场景优先使用屏幕矩形拷贝，这样更稳定地包含标题栏/边框，
+        // 避免部分窗口在 WindowDC/PrintWindow 下只返回客户区。
         RECT wr{};
         if (window_rect_utils::get_effective_window_rect(hwnd, wr)) {
             hScreenDC = GetDC(nullptr);
@@ -48,7 +48,7 @@ std::vector<uint8_t> GdiCapture::capture(HWND hwnd, int width, int height, bool 
     }
 
     if (includeNonClient) {
-        // Full-window mode must include non-client area.
+        // 全窗口模式必须包含非客户区。
         if (useScreenRectCopy) {
             ok = BitBlt(hMemDC, 0, 0, width, height, hScreenDC, srcX, srcY, SRCCOPY | CAPTUREBLT);
         }
@@ -59,7 +59,7 @@ std::vector<uint8_t> GdiCapture::capture(HWND hwnd, int width, int height, bool 
             ok = PrintWindow(hwnd, hMemDC, 0);
         }
     } else {
-        // Client-area capture first: avoids non-client jitter for DXGI fallback paths.
+        // 客户区模式优先采客户区，避免 DXGI 回退路径的非客户区抖动。
         ok = PrintWindow(hwnd, hMemDC, PW_CLIENTONLY);
         if (!ok) {
             ok = BitBlt(hMemDC, 0, 0, width, height, hWndDC, 0, 0, SRCCOPY | CAPTUREBLT);

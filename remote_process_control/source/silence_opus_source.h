@@ -3,8 +3,8 @@
 #include "source/stream.h"
 #include <cstdint>
 
-// Minimal Opus "silence" source.
-// Uses RFC 6716 comfort noise packet 0xF8 0xFF 0xFE at 20ms intervals.
+// 最小化 Opus 静音源实现。
+// 以 20ms 间隔发送 RFC 6716 舒适噪声包 0xF8 0xFF 0xFE。
 class SilenceOpusSource : public StreamSource
 {
 public:

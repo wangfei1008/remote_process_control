@@ -16,7 +16,7 @@ DXGICapture::~DXGICapture()
 
 void DXGICapture::reset()
 {
-    // Reset duplication state so next capture will re-acquire frames.
+    // 重置复制状态，确保下次采集重新获取帧。
     reset_duplication();
 }
 
@@ -198,8 +198,8 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     if (!m_available || !hwnd || !IsWindow(hwnd)) return {};
     if (!ensure_output_for_window(hwnd)) return {};
 
-    // Use window rect (including non-client area like title bar/borders)
-    // so DXGI and GDI capture use a consistent region definition.
+    // 使用窗口矩形（含标题栏/边框等非客户区），
+    // 使 DXGI 与 GDI 采集区域定义保持一致。
     RECT winRc{};
     if (!window_rect_utils::get_effective_window_rect(hwnd, winRc)) return {};
 

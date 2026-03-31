@@ -26,9 +26,9 @@ void WebRTCSocket::start(const std::string& ip, int port)
 
 void WebRTCSocket::_init_signaling()
 {    
-    //tencent stun:stun.l.tencent.com:3478
-    //aliyunstun:stun.aliyun.com:3478
-    //google:stun:stun.l.google.com:19302
+    // 可选 STUN：腾讯 stun.l.tencent.com:3478
+    // 可选 STUN：阿里 stun.aliyun.com:3478
+    // 可选 STUN：Google stun.l.google.com:19302
     std::string stun_server = "stun.l.google.com:19302";
 
     m_config.iceServers.emplace_back(stun_server);
@@ -95,18 +95,18 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     if (it == message.end())return;
 
     std::string type = it->get<std::string>();
-    if (type == "request") // start session request
+    if (type == "request") // 启动会话请求
     {
-        // Always start from a clean state: each request should be a fresh session.
+        // 每次请求都从干净状态开始，确保是全新会话。
         _stop_and_reset_stream();
 
-        // optional process path from frontend
+        // 前端可选传入进程路径
         if (message.contains("exePath")) {
             const std::string exePath = message.value("exePath", "");
             if (!exePath.empty()) {
                 std::scoped_lock lk(m_stream_mtx);
                 m_exe_path = exePath;
-                // reset stream so next start uses new process
+                // 重置流，确保下次启动使用新进程
                 if (m_stream) {
                     m_stream->stop();
                     m_stream.reset();
@@ -128,7 +128,7 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
         m_clients.emplace(id, client);
         pc->setLocalDescription();
     }
-    else if (type == "answer") // SDP answer
+    else if (type == "answer") // SDP 应答
     {
         if (auto jt = m_clients.find(id); jt != m_clients.end()) 
         {
@@ -140,7 +140,7 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     }
     else if (type == "stop")
     {
-        // Regardless of who initiated stop, enforce full cleanup and let frontend exit video page.
+        // 无论由谁触发停止，都执行完整清理，并让前端退出视频页。
         _stop_and_reset_stream();
     }
 }
@@ -154,13 +154,13 @@ std::shared_ptr<rtc::PeerConnection> WebRTCSocket::_init_peer_connection(const s
             if (state == rtc::PeerConnection::State::Disconnected ||
                 state == rtc::PeerConnection::State::Failed ||
                 state == rtc::PeerConnection::State::Closed) {
-                // remove disconnected client
+                // 移除断开的客户端
                 m_thread_queue.dispatch([id, this]() {
                     m_clients.erase(id);
                     _release_control(id);
-                    // Strong lifecycle guarantee:
-                    // when frontend closes page/stream and no clients remain,
-                    // immediately tear down process/stream resources.
+                    // 强生命周期保证：
+                    // 当前端关闭页面/流且无客户端时，
+                    // 立即释放进程与流资源。
                     if (m_clients.empty()) {
                         _stop_and_reset_stream();
                     }
@@ -178,7 +178,7 @@ std::shared_ptr<rtc::PeerConnection> WebRTCSocket::_init_peer_connection(const s
                         {"type", description->typeString()},
                         {"sdp", std::string(description.value())}
                     };
-                    // Gathering complete, send answer
+                    // 候选收集完成，发送应答
 					auto ws = make_weak_ptr(m_ws);
                     if (auto wws = ws.lock()) {
                         wws->send(message.dump());
@@ -212,7 +212,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
     auto audio = std::make_shared<SilenceOpusSource>();
 
     auto stream = std::make_shared<Stream>(video, audio);
-    // set callback responsible for sample sending
+    // 设置样本发送回调
     stream->on_sample([ws = make_weak_ptr(stream), this](Stream::StreamSourceType type, uint64_t sampleTime, rtc::binary sample) {
         static auto lastLog = std::chrono::steady_clock::now();
         static uint64_t videoFrameIndex = 0;
@@ -231,7 +231,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                 }
             }
 
-            // Send frameMark at a lower frequency to reduce DataChannel/JSON overhead.
+            // 降低 frameMark 发送频率，减少 DataChannel/JSON 开销。
             constexpr uint64_t kFrameMarkInterval = 10;
             if ((videoFrameIndex % kFrameMarkInterval) == 0) {
                 uint64_t srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -273,8 +273,8 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                     }
                 }
 
-                // Capture health telemetry for frontend visualization/debug.
-                // Keep it low frequency to avoid extra signaling overhead.
+                // 发送采集健康遥测，供前端可视化与调试。
+                // 保持低频，避免额外信令开销。
                 constexpr uint64_t kCaptureHealthInterval = 30;
                 if ((videoFrameIndex % kCaptureHealthInterval) == 0) {
                     const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -306,12 +306,12 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
         std::vector<ClientTrack> tracks{};
         std::string streamType = type == Stream::StreamSourceType::Video ? "video" : "audio";
 
-        // get track for given type
+        // 获取当前类型对应的轨道
         std::function<std::optional<std::shared_ptr<ClientTrackData>>(std::shared_ptr<ClientPeerConnection>)> getTrackData = [type](std::shared_ptr<ClientPeerConnection> client)
             {
                 return type == Stream::StreamSourceType::Video ? client->m_video: client->m_audio;
             };
-        // get all clients with Ready state
+        // 获取所有 Ready 状态客户端
         for (auto id_client : m_clients) {
             auto id = id_client.first;
             auto client = id_client.second;
@@ -341,7 +341,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
         }
         m_thread_queue.dispatch([ws, this]() {
             if (m_clients.empty()) {
-                // we have no clients, stop the stream
+                // 没有客户端时停止流
                 if (auto stream = ws.lock()) {
                     stream->stop();
                 }
@@ -374,10 +374,10 @@ void WebRTCSocket::_broadcast_remote_process_exited()
 
 void WebRTCSocket::_stop_and_reset_stream()
 {
-    // Notify all active frontends to leave video page before teardown.
+    // 拆除前先通知所有活跃前端离开视频页面。
     _broadcast_remote_process_exited();
 
-    // Ensure all client PeerConnections are closed and forgotten.
+    // 确保所有客户端 PeerConnection 都被关闭并清理。
     _close_all_clients();
 
     InputController::instance()->clear_mouse_target();

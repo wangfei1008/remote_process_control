@@ -33,17 +33,17 @@ private:
     std::string m_signaling_ip;
     std::string m_signaling_url;
 	int m_signaling_port;
-	DispatchQueue m_thread_queue; // Single thread for WebRTC operations
+	DispatchQueue m_thread_queue; // WebRTC 操作使用单线程队列
 
 	std::unordered_map<std::string, std::shared_ptr<ClientPeerConnection>> m_clients;
 	rtc::Configuration m_config;
 
-	// shared stream / process
+	// 共享的流与进程对象
 	std::shared_ptr<Stream> m_stream;
 	std::mutex m_stream_mtx;
 	std::string m_exe_path;
 
-	// concurrent control limiter
+	// 并发控制权限限制
 	std::mutex m_control_mtx;
 	std::string m_controller_id;
 };

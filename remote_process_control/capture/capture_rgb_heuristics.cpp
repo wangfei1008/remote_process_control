@@ -138,4 +138,4 @@ void repair_top_strip_from_previous(std::vector<uint8_t>& rgb, int width, int he
     }
 }
 
-} // namespace capture_rgb
+}

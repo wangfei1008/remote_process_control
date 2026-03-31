@@ -74,5 +74,5 @@ inline bool get_bool(const char* key, bool default_value)
     return default_value;
 }
 
-} // namespace runtime_config
+}
 

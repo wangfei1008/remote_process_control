@@ -1,8 +1,8 @@
 #include "source/stream.h"
 #include <ctime>
-#include <winsock2.h> // for struct timeval
+#include <winsock2.h> // 用于 struct timeval
 #ifdef _WIN32
-// taken from https://stackoverflow.com/questions/5801813/c-usleep-is-obsolete-workarounds-for-windows-mingw
+// 参考：https://stackoverflow.com/questions/5801813/c-usleep-is-obsolete-workarounds-for-windows-mingw
 #include <windows.h>
 
 void usleep(__int64 usec)
@@ -10,7 +10,7 @@ void usleep(__int64 usec)
     HANDLE timer;
     LARGE_INTEGER ft;
 
-    ft.QuadPart = -(10 * usec); // Convert to 100 nanosecond interval, negative value indicates relative time
+    ft.QuadPart = -(10 * usec); // 转为 100 纳秒单位，负值表示相对时间
 
     timer = CreateWaitableTimer(NULL, TRUE, NULL);
     SetWaitableTimer(timer, &ft, 0, NULL, NULL, 0);
@@ -23,7 +23,7 @@ void usleep(__int64 usec)
 #endif
 
 #ifdef _MSC_VER
-// taken from https://stackoverflow.com/questions/10905892/equivalent-of-gettimeday-for-windows
+// 参考：https://stackoverflow.com/questions/10905892/equivalent-of-gettimeday-for-windows
 #include <windows.h>
 
 
@@ -103,12 +103,12 @@ std::pair<std::shared_ptr<StreamSource>, Stream::StreamSourceType> Stream::unsaf
     auto currentTime = current_time_in_microseconds();
 
     auto elapsed = currentTime - m_start_time;
-    // Waiting is handled outside the mutex by the caller.
+    // 等待逻辑由调用方在互斥锁外部处理。
     return { ss, sst };
 }
 
 void Stream::send_sample() {
-    // Compute which source to send next and when, without holding the mutex during sleep.
+    // 计算下一次发送的源与时间点，休眠期间不持有互斥锁。
     std::shared_ptr<StreamSource> ss;
     StreamSourceType sst;
     uint64_t nextTime = 0;
@@ -160,7 +160,7 @@ void Stream::start()
     m_start_time = current_time_in_microseconds();
     m_c_audio->start();
     m_c_video->start();
-    // Preload first samples so the very first sent frame isn't empty
+    // 预加载首帧，避免首次发送为空。
     m_c_audio->load_next_sample();
     m_c_video->load_next_sample();
     m_dispatch_queue.dispatch([this]() {

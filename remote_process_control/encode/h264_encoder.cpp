@@ -12,25 +12,25 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <winsock2.h> // For htonl on Windows
+#include <winsock2.h> // Windows 下用于 htonl
 #else
-#include <arpa/inet.h> // For htonl on Linux/Unix
+#include <arpa/inet.h> // Linux/Unix 下用于 htonl
 #endif
 
-// Convert Annex-B bytestream into length-prefixed NAL units.
+// 将 Annex-B 字节流转换为长度前缀 NAL 单元。
 static void annexb_to_length_prefixed(const uint8_t* src, size_t src_size, std::vector<uint8_t>& out) {
     out.clear();
     if (!src || src_size == 0) return;
 
     auto find_start_code = [&](size_t from, size_t& sc_pos, size_t& sc_len) -> bool {
         for (size_t i = from; i + 2 < src_size; ++i) {
-            // 00 00 01
+            // 起始码：00 00 01
             if (src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 1) {
                 sc_pos = i;
                 sc_len = 3;
                 return true;
             }
-            // 00 00 00 01
+            // 起始码：00 00 00 01
             if (i + 3 < src_size &&
                 src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 0 && src[i + 3] == 1) {
                 sc_pos = i;
@@ -52,7 +52,7 @@ static void annexb_to_length_prefixed(const uint8_t* src, size_t src_size, std::
         const bool has_next = find_start_code(nalu_start, next_sc_pos, next_sc_len);
         size_t nalu_end = has_next ? next_sc_pos : src_size;
 
-        // Trim trailing zero padding before next start code.
+        // 在下一个起始码前裁掉尾部零填充。
         while (nalu_end > nalu_start && src[nalu_end - 1] == 0) {
             --nalu_end;
         }
@@ -75,9 +75,9 @@ static void annexb_to_length_prefixed(const uint8_t* src, size_t src_size, std::
 static bool contains_annexb_start_code(const uint8_t* src, size_t src_size) {
     if (!src || src_size < 3) return false;
     for (size_t i = 0; i + 2 < src_size; ++i) {
-        // 00 00 01
+        // 起始码：00 00 01
         if (src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 1) return true;
-        // 00 00 00 01
+        // 起始码：00 00 00 01
         if (i + 3 < src_size && src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 0 && src[i + 3] == 1) return true;
     }
     return false;
@@ -88,10 +88,10 @@ struct EncoderCache {
     SwsContext* sws_ctx = nullptr;
     AVFrame* rgb_frame = nullptr;
     AVFrame* yuv_frame = nullptr;
-    // src: provided RGB24 size
+    // 源尺寸：输入 RGB24 尺寸
     int src_width = 0;
     int src_height = 0;
-    // dst: encoder ctx size (fixed)
+    // 目标尺寸：编码器上下文尺寸（固定）
     int dst_width = 0;
     int dst_height = 0;
 };
@@ -174,9 +174,9 @@ std::vector<std::pair<std::string, const AVCodec*>> build_codec_candidates()
     } else if (mode == "amf") {
         push("amf", byName("h264_amf"));
     } else if (mode == "sw") {
-        // Strict software preference: do not fallback to generic "h264" here,
-        // because on Windows that commonly maps to h264_mf and reintroduces
-        // hardware/MFT-specific instability.
+        // 严格软件优先：这里不要回退到通用 "h264"，
+        // 因为在 Windows 上常会映射到 h264_mf，
+        // 从而重新引入硬件/MFT 特有不稳定性。
         push("libx264", byName("libx264"));
         push("openh264", byName("libopenh264"));
     } else {
@@ -189,7 +189,7 @@ std::vector<std::pair<std::string, const AVCodec*>> build_codec_candidates()
     }
     return out;
 }
-} // namespace
+} // 匿名命名空间
 
 AVCodecContext* create_h264_encoder(int width, int height, int fps) {
     auto candidates = build_codec_candidates();
@@ -205,14 +205,14 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
         ctx->height = height;
         ctx->time_base = { 1, fp };
         ctx->framerate = { fp, 1 };
-        // Keep GOP reasonably long to avoid frequent bitrate spikes and visible flicker.
-        // Too-short GOP (e.g. IDR every few frames) can cause periodic pulsing even on LAN.
+        // 保持较长 GOP，避免频繁码率尖峰和可见闪烁。
+        // 关键帧间隔过短（如每几帧一个 IDR）即使在局域网也可能出现周期性脉动。
         ctx->gop_size = std::max<int>(24, fp);
         ctx->max_b_frames = 0;
         ctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
         const int64_t px = static_cast<int64_t>(width) * static_cast<int64_t>(height);
-        // Be conservative with bitrate to avoid receiver decode drops under jitter.
+        // 码率设置适度保守，避免抖动下接收端解码掉帧。
         int64_t br = px * 5LL;
         br = std::max<int64_t>(1800000LL, std::min<int64_t>(12000000LL, br));
         ctx->bit_rate = static_cast<int>(br);
@@ -251,30 +251,30 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
     return nullptr;
 }
 
-// Encode one RGB frame with the provided H264 encoder context.
-// rgb_data: packed RGB24 frame buffer (stride = width * 3).
-// width, height: input frame size.
-// out: encoded H264 access unit output.
-// returns true when encoded output is available.
+// 使用给定 H264 编码器上下文编码一帧 RGB。
+// 参数 rgb_data：紧凑 RGB24 帧缓冲（stride = width * 3）。
+// 参数 width、height：输入帧尺寸。
+// 参数 out：编码后的 H264 访问单元输出。
+// 返回 true 表示有可用编码输出。
 bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int height, int64_t& frame_seq,
                 std::vector<uint8_t>& out, bool force_keyframe)
 {
     if (!ctx || !rgb_data) return false;
 
     std::scoped_lock lk(g_cache_mtx);
-    // Treat width/height as SRC size; sws will scale to ctx->width/height (DST).
+    // 将 width/height 视为源尺寸；sws 会缩放到 ctx->width/height（目标尺寸）。
     if (!ensure_encoder_cache(ctx, width, height)) return false;
     auto& cache = g_encoder_cache[ctx];
 
-    // 1) Reuse AVFrame/SwsContext to avoid per-frame allocation/initialization.
+    // 1) 复用 AVFrame/SwsContext，避免逐帧分配与初始化。
     AVFrame* frame = cache.rgb_frame;
     AVFrame* yuv_frame = cache.yuv_frame;
     av_image_fill_arrays(frame->data, frame->linesize, rgb_data, AV_PIX_FMT_RGB24, width, height, 1);
 
-    // 2. RGB -> YUV420P
+    // 2) RGB -> YUV420P
     yuv_frame->pts = frame_seq++;
-    // Force IDR only when needed: first frame or explicit request.
-    // Let encoder follow gop_size for periodic keyframes to keep cadence stable.
+    // 仅在需要时强制 IDR：首帧或显式请求。
+    // 周期性关键帧交由 gop_size 控制，以保持节奏稳定。
     {
         if (force_keyframe || yuv_frame->pts == 0) {
             yuv_frame->pict_type = AV_PICTURE_TYPE_I;
@@ -291,7 +291,7 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
 
     sws_scale(cache.sws_ctx, frame->data, frame->linesize, 0, height, yuv_frame->data, yuv_frame->linesize);
 
-    // 3) Encode.
+    // 3) 编码。
     AVPacket pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.data = nullptr;
@@ -306,14 +306,14 @@ bool encode_rgb(AVCodecContext* ctx, const uint8_t* rgb_data, int width, int hei
     }
     ret = avcodec_receive_packet(ctx, &pkt);
     if (ret == 0) {
-        // Some encoders output Annex-B, some output AVCC (length-prefixed).
-        // Detect Annex-B by scanning the whole packet, not only packet head.
-        // Some backends may prepend bytes before the first start code.
+        // 某些编码器输出 Annex-B，某些输出 AVCC（长度前缀）。
+        // 对 Annex-B 的检测应扫描整个包，而不只检查包头。
+        // 某些后端会在首个起始码前插入额外字节。
         out.clear();
         if (pkt.data && pkt.size > 0 && contains_annexb_start_code(pkt.data, static_cast<size_t>(pkt.size))) {
             annexb_to_length_prefixed(pkt.data, pkt.size, out);
         }
-        // Keep raw payload for AVCC output or conversion fallback.
+        // 保留原始负载，供 AVCC 输出或转换回退使用。
         if (out.empty() && pkt.data && pkt.size > 0) {
             out.assign(pkt.data, pkt.data + pkt.size);
         }

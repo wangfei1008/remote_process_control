@@ -13,7 +13,7 @@ public:
     ~DXGICapture();
 
     bool is_available() const { return m_available; }
-    // Recreate/reset internal duplication resources after repeated capture failures.
+    // 多次采集失败后重建/重置内部复制资源。
     void reset();
     std::vector<uint8_t> capture_window_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop);
 

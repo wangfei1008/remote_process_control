@@ -3,7 +3,7 @@
 SilenceOpusSource::SilenceOpusSource(uint64_t frame_duration_us)
     : m_frame_duration_us(frame_duration_us)
 {
-    // RFC 6716 "comfort noise" (silence) packet
+    // 按 RFC 6716 生成舒适噪声（静音）数据包
     const std::byte pkt[] = { std::byte{0xF8}, std::byte{0xFF}, std::byte{0xFE} };
     m_sample = rtc::binary(std::begin(pkt), std::end(pkt));
 }

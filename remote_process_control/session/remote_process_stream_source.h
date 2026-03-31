@@ -21,11 +21,11 @@ public:
     HWND launch_process(const std::string& exe_path);
     void terminate();
 
-    // Called by receiver (frontend) when it detects sustained packet loss/jitter.
-    // Forces the next encoded video to include an IDR/keyframe for faster decoder recovery.
+    // 当接收端（前端）检测到持续丢包/抖动时调用。
+    // 强制下一帧视频包含 IDR 关键帧，以加快解码恢复。
     void request_force_keyframe();
 
-    // StreamSource interface implementation.
+    // 流源接口实现。
     void start() override;
     void stop() override;
     void load_next_sample() override;
@@ -34,34 +34,34 @@ public:
     uint64_t get_sample_duration_us() override;
 
     HWND get_main_window() const { return m_mainWindow; }
-    /** Captured frame width and height used by the current encoder instance. */
+    //当前编码器实例使用的采集帧宽高。
     int get_capture_width() const { return m_width; }
     int get_capture_height() const { return m_height; }
-    /** Last capture time in milliseconds. */
+    //最近一次采集耗时（毫秒）
     uint32_t get_last_capture_ms() const { return m_last_capture_ms; }
-    /** Last H.264 encode time in milliseconds. */
+    //最近一次 H.264 编码耗时（毫秒）
     uint32_t get_last_encode_ms() const { return m_last_encode_ms; }
-    /** Unix timestamp (ms) for the most recently produced video frame. */
+    //最近产生视频帧的 Unix 时间戳（毫秒）
     uint64_t get_last_frame_unix_ms() const { return m_last_frame_unix_ms; }
-    /** Whether the latest capture path used DXGI hardware duplication. */
+    //最近一次采集是否使用了 DXGI 硬件复制
     bool get_last_capture_used_hw() const { return m_capture_backend_state.get_last_capture_used_hw(); }
-    /** Whether DXGI is disabled for the current session due to repeated corruption. */
+    //当前会话是否因重复异常而禁用 DXGI
     bool is_dxgi_disabled_for_session() const { return m_capture_backend_state.is_dxgi_disabled_for_session(); }
-    /** Current consecutive streak for detected top-black-strip corruption pattern. */
+    //顶部黑条异常模式的当前连续命中次数
     int get_top_black_strip_streak() const { return m_capture_backend_state.get_top_black_strip_streak(); }
-    /** Session-level DXGI instability score (higher means more frequent DXGI failures). */
+    //会话级 DXGI 不稳定分数（越高表示失败越频繁）
     int get_dxgi_instability_score() const { return m_capture_backend_state.get_dxgi_instability_score(); }
-    /** Unix ms until which software capture is forced. 0 means no forced software window. */
+    //强制软件采集截止到的 Unix 毫秒时间；0 表示未强制
     uint64_t get_force_software_capture_until_unix_ms() const {
         return m_capture_backend_state.get_force_software_capture_until_unix_ms();
     }
 
-    /** Set callback for remote process/window exit notifications. */
+    //设置远程进程/窗口退出通知回调。
     void set_on_remote_exit(std::function<void()> cb) { m_on_remote_exit = std::move(cb); }
 
 private:
     void notify_remote_exit();
-    /** Process exit / HWND validity; return false to stop before capture. */
+    //检查进程退出与 HWND 有效性；返回 false 表示采集前停止
     bool tick_window_and_health(std::chrono::steady_clock::time_point& last_no_window_diag);
     BmpDumpDiag make_dump_diag(bool use_hw_capture) const;
     void emit_hold_or_empty_sample(bool request_idr);
@@ -81,8 +81,8 @@ private:
                              std::chrono::steady_clock::time_point t_after_cap, bool applied_layout);
 
     PROCESS_INFORMATION m_pi;
-    DWORD m_launchPid = 0;   // PID returned by CreateProcess
-    DWORD m_capturePid = 0;  // PID that actually owns the window we capture
+    DWORD m_launchPid = 0;   // CreateProcess 返回的 PID
+    DWORD m_capturePid = 0;  // 实际拥有被采集窗口的 PID
     HWND m_mainWindow = nullptr;
     std::string m_targetExeBaseName;
     int m_width;
@@ -101,10 +101,10 @@ private:
     uint64_t m_window_missing_since_unix_ms = 0;
     uint32_t m_window_missing_exit_grace_ms = 5000;
     bool m_running = false;
-    GdiCapture m_gdiCapture; // GDI window image capture backend.
+    GdiCapture m_gdiCapture; // GDI 窗口图像采集后端。
     DXGICapture m_dxgiCapture;
     SampleOutputState m_sample_output_state;
-    // Keep last good RGB frame for lightweight in-place repair (e.g. top black strip).
+    // 保留最近一帧有效 RGB，用于轻量原位修复（例如顶部黑条）。
     std::vector<uint8_t> m_last_good_rgb_frame;
     int m_last_good_rgb_w = 0;
     int m_last_good_rgb_h = 0;

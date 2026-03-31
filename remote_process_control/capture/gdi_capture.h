@@ -6,8 +6,8 @@
 class GdiCapture
 {
 public:
-    // Capture selected window region and return an RGB24 byte buffer.
-    // includeNonClient=true captures full window (title bar/borders included).
+    // 采集指定窗口区域并返回 RGB24 字节缓冲。
+    // 当 includeNonClient=true 时采集整个窗口（含标题栏/边框）。
     std::vector<uint8_t> capture(HWND hwnd, int width, int height, bool includeNonClient);
 };
 

@@ -1,10 +1,9 @@
 /**
- * libdatachannel streamer example
- * Copyright (c) 2020 Filip Klembara (in2core)
+ * 基于 libdatachannel 的推流示例
+ * 版权所有 (c) 2020 Filip Klembara (in2core)
  *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ * 本源码受 Mozilla Public License v2.0 约束。
+ * 若未随文件附带 MPL 副本，可在 https://mozilla.org/MPL/2.0/ 获取。
  */
 
 
@@ -19,13 +18,13 @@ DispatchQueue::DispatchQueue(std::string name, size_t threadCount) :name{std::mo
 }
 
 DispatchQueue::~DispatchQueue() {
-    // Signal to dispatch threads that it's time to wrap up
+    // 通知分发线程进入收尾阶段
     std::unique_lock<std::mutex> lock(lockMutex);
     quit = true;
     lock.unlock();
     condition.notify_all();
 
-    // Wait for threads to finish before we exit
+    // 退出前等待线程全部结束
     for(size_t i = 0; i < threads.size(); i++)
     {
         if(threads[i].joinable())
@@ -44,8 +43,8 @@ void DispatchQueue::dispatch(const fp_t& op) {
     std::unique_lock<std::mutex> lock(lockMutex);
     queue.push(op);
 
-    // Manual unlocking is done before notifying, to avoid waking up
-    // the waiting thread only to block again (see notify_one for details)
+    // 通知前先手动解锁，避免唤醒线程后再次阻塞
+    // 详见 notify_one 的行为说明
     lock.unlock();
     condition.notify_one();
 }
@@ -54,8 +53,8 @@ void DispatchQueue::dispatch(fp_t&& op) {
     std::unique_lock<std::mutex> lock(lockMutex);
     queue.push(std::move(op));
 
-    // Manual unlocking is done before notifying, to avoid waking up
-    // the waiting thread only to block again (see notify_one for details)
+    // 通知前先手动解锁，避免唤醒线程后再次阻塞
+    // 详见 notify_one 的行为说明
     lock.unlock();
     condition.notify_one();
 }
@@ -64,18 +63,18 @@ void DispatchQueue::dispatch_thread_handler(void)
 {
     std::unique_lock<std::mutex> lock(lockMutex);
     do {
-        //Wait until we have data or a quit signal
+        // 等待直到有任务或收到退出信号
         condition.wait(lock, [this]{
             return (queue.size() || quit);
         });
 
-        //after wait, we own the lock
+        // 等待返回后当前线程持有锁
         if(!quit && queue.size())
         {
             auto op = std::move(queue.front());
             queue.pop();
 
-            //unlock now that we're done messing with the queue
+            // 队列操作完成后先解锁
             lock.unlock();
 
             op();
