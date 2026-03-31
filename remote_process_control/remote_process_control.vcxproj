@@ -19,38 +19,60 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="client_peer_connection.cpp" />
-    <ClCompile Include="desktop_capture.cpp" />
-    <ClCompile Include="desktop_screen_source.cpp" />
-    <ClCompile Include="dispatch_queue.cpp" />
-    <ClCompile Include="dxgi_capture.cpp" />
-    <ClCompile Include="h264_encoder.cpp" />
-    <ClCompile Include="input_controller.cpp" />
+    <ClCompile Include="capture\bmp_dump_writer.cpp" />
+    <ClCompile Include="capture\dxgi_capture.cpp" />
+    <ClCompile Include="capture\gdi_capture.cpp" />
+    <ClCompile Include="transport\client_peer_connection.cpp" />
+    <ClCompile Include="capture\capture_backend_state.cpp" />
+    <ClCompile Include="capture\capture_coordinator.cpp" />
+    <ClCompile Include="capture\capture_discard_policy.cpp" />
+    <ClCompile Include="transport\dispatch_queue.cpp" />
+    <ClCompile Include="encode\encoder_layout_policy.cpp" />
+    <ClCompile Include="capture\frame_sanitizer.cpp" />
+    <ClCompile Include="policy\frame_pacing_policy.cpp" />
+    <ClCompile Include="encode\h264_encoder.cpp" />
+    <ClCompile Include="input\input_controller.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="capture_rgb_heuristics.cpp" />
-    <ClCompile Include="h264_avcc_utils.cpp" />
-    <ClCompile Include="process_manager.cpp" />
-    <ClCompile Include="silence_opus_source.cpp" />
-    <ClCompile Include="stream.cpp" />
-    <ClCompile Include="webrtc_socket.cpp" />
-    <ClCompile Include="window_capture.cpp" />
+    <ClCompile Include="capture\capture_rgb_heuristics.cpp" />
+    <ClCompile Include="encode\h264_avcc_utils.cpp" />
+    <ClCompile Include="session\remote_process_stream_source.cpp" />
+    <ClCompile Include="session\remote_process_session.cpp" />
+    <ClCompile Include="session\sample_output_state.cpp" />
+    <ClCompile Include="session\session_health_policy.cpp" />
+    <ClCompile Include="source\silence_opus_source.cpp" />
+    <ClCompile Include="source\stream.cpp" />
+    <ClCompile Include="encode\video_encode_pipeline.cpp" />
+    <ClCompile Include="transport\webrtc_socket.cpp" />
+    <ClCompile Include="capture\window_frame_grabber.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="client_peer_connection.h" />
-    <ClInclude Include="desktop_capture.hpp" />
-    <ClInclude Include="desktop_screen_source.h" />
-    <ClInclude Include="dispatch_queue.hpp" />
-    <ClInclude Include="dxgi_capture.h" />
-    <ClInclude Include="h264_encoder.hpp" />
-    <ClInclude Include="input_controller.h" />
-    <ClInclude Include="capture_rgb_heuristics.h" />
-    <ClInclude Include="h264_avcc_utils.h" />
-    <ClInclude Include="process_manager.h" />
-    <ClInclude Include="rpc_time.h" />
-    <ClInclude Include="silence_opus_source.h" />
-    <ClInclude Include="stream.h" />
-    <ClInclude Include="webrtc_socket.h" />
-    <ClInclude Include="window_capture.h" />
+    <ClInclude Include="capture\bmp_dump_writer.h" />
+    <ClInclude Include="capture\dxgi_capture.h" />
+    <ClInclude Include="capture\gdi_capture.h" />
+    <ClInclude Include="transport\client_peer_connection.h" />
+    <ClInclude Include="capture\capture_backend_state.h" />
+    <ClInclude Include="capture\capture_coordinator.h" />
+    <ClInclude Include="capture\capture_discard_policy.h" />
+    <ClInclude Include="transport\dispatch_queue.hpp" />
+    <ClInclude Include="encode\encoder_layout_policy.h" />
+    <ClInclude Include="capture\frame_sanitizer.h" />
+    <ClInclude Include="policy\frame_pacing_policy.h" />
+    <ClInclude Include="encode\h264_encoder.hpp" />
+    <ClInclude Include="input\input_controller.h" />
+    <ClInclude Include="capture\capture_rgb_heuristics.h" />
+    <ClInclude Include="encode\h264_avcc_utils.h" />
+    <ClInclude Include="session\remote_process_stream_source.h" />
+    <ClInclude Include="session\remote_process_session.h" />
+    <ClInclude Include="session\session_health_policy.h" />
+    <ClInclude Include="session\sample_output_state.h" />
+    <ClInclude Include="common\runtime_config.h" />
+    <ClInclude Include="common\window_rect_utils.h" />
+    <ClInclude Include="common\rpc_time.h" />
+    <ClInclude Include="source\silence_opus_source.h" />
+    <ClInclude Include="source\stream.h" />
+    <ClInclude Include="encode\video_encode_pipeline.h" />
+    <ClInclude Include="capture\window_frame_grabber.h" />
+    <ClInclude Include="transport\webrtc_socket.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -114,6 +136,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -128,6 +151,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -143,6 +167,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -158,6 +183,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

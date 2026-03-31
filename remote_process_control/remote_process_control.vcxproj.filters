@@ -13,99 +13,109 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Source Files\capture">
+      <UniqueIdentifier>{B7B9BBFD-D2A3-44F2-A79A-2CBA07E5A711}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\encode">
+      <UniqueIdentifier>{89D5D451-8BF7-4DCE-86B8-9DCCE7F39DA8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\session">
+      <UniqueIdentifier>{8A31FE7A-9FEC-4F29-A404-CB84D228113A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\policy">
+      <UniqueIdentifier>{F6BFFB31-818A-4CA7-93EB-0AB6C8F09223}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\transport">
+      <UniqueIdentifier>{0A6E2D0E-8C4A-4A79-9D2B-4E3D8E1F1A11}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\source">
+      <UniqueIdentifier>{8F3D1B68-8E7E-4BD0-8F4A-2E51D9C8A221}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\input">
+      <UniqueIdentifier>{70B0326D-9F70-46A9-BE6D-30D04F865E31}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\common">
+      <UniqueIdentifier>{31EFA8A4-4C16-4FB7-9CA6-04D542EC4F41}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\capture">
+      <UniqueIdentifier>{902905A4-2CA8-47E1-9D7E-0107EEA8D14E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\encode">
+      <UniqueIdentifier>{BDFD65E8-4B42-4B15-B883-E884811D4A0F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\session">
+      <UniqueIdentifier>{E6B3D341-635A-4D44-B356-B4B6D21E5ED0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\policy">
+      <UniqueIdentifier>{D4E80A5B-2EC6-4C36-8DD9-58F9F7C35BE4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\transport">
+      <UniqueIdentifier>{A0F6D94A-2BC2-47FD-90A0-EA09F2BB9551}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\source">
+      <UniqueIdentifier>{4C84D98C-31B8-48C5-BD85-347D1A5F4661}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\input">
+      <UniqueIdentifier>{1D40277B-0880-4A2A-BE94-3E9E4E43F171}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common">
+      <UniqueIdentifier>{CB68758E-7A7D-47D0-8CF2-348937B46C81}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="h264_encoder.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="desktop_capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="main.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="webrtc_socket.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="dispatch_queue.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="client_peer_connection.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="stream.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="desktop_screen_source.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="capture_rgb_heuristics.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="h264_avcc_utils.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="process_manager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="window_capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="input_controller.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="silence_opus_source.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="dxgi_capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
+    <ClCompile Include="capture\bmp_dump_writer.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="capture\dxgi_capture.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="capture\gdi_capture.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="transport\client_peer_connection.cpp"><Filter>Source Files\transport</Filter></ClCompile>
+    <ClCompile Include="capture\capture_backend_state.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="capture\capture_coordinator.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="capture\capture_discard_policy.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="transport\dispatch_queue.cpp"><Filter>Source Files\transport</Filter></ClCompile>
+    <ClCompile Include="encode\encoder_layout_policy.cpp"><Filter>Source Files\encode</Filter></ClCompile>
+    <ClCompile Include="capture\frame_sanitizer.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="policy\frame_pacing_policy.cpp"><Filter>Source Files\policy</Filter></ClCompile>
+    <ClCompile Include="encode\h264_encoder.cpp"><Filter>Source Files\encode</Filter></ClCompile>
+    <ClCompile Include="input\input_controller.cpp"><Filter>Source Files\input</Filter></ClCompile>
+    <ClCompile Include="main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="capture\capture_rgb_heuristics.cpp"><Filter>Source Files\capture</Filter></ClCompile>
+    <ClCompile Include="encode\h264_avcc_utils.cpp"><Filter>Source Files\encode</Filter></ClCompile>
+    <ClCompile Include="session\remote_process_stream_source.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="session\remote_process_session.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="session\sample_output_state.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="session\session_health_policy.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="source\silence_opus_source.cpp"><Filter>Source Files\source</Filter></ClCompile>
+    <ClCompile Include="source\stream.cpp"><Filter>Source Files\source</Filter></ClCompile>
+    <ClCompile Include="encode\video_encode_pipeline.cpp"><Filter>Source Files\encode</Filter></ClCompile>
+    <ClCompile Include="transport\webrtc_socket.cpp"><Filter>Source Files\transport</Filter></ClCompile>
+    <ClCompile Include="capture\window_frame_grabber.cpp"><Filter>Source Files\capture</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="h264_encoder.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="desktop_capture.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="webrtc_socket.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="dispatch_queue.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="client_peer_connection.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="stream.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="desktop_screen_source.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="capture_rgb_heuristics.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="h264_avcc_utils.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="process_manager.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_time.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="window_capture.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="input_controller.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="silence_opus_source.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="dxgi_capture.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
+    <ClInclude Include="capture\bmp_dump_writer.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="capture\dxgi_capture.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="capture\gdi_capture.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="transport\client_peer_connection.h"><Filter>Header Files\transport</Filter></ClInclude>
+    <ClInclude Include="capture\capture_backend_state.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="capture\capture_coordinator.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="capture\capture_discard_policy.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="transport\dispatch_queue.hpp"><Filter>Header Files\transport</Filter></ClInclude>
+    <ClInclude Include="encode\encoder_layout_policy.h"><Filter>Header Files\encode</Filter></ClInclude>
+    <ClInclude Include="capture\frame_sanitizer.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="policy\frame_pacing_policy.h"><Filter>Header Files\policy</Filter></ClInclude>
+    <ClInclude Include="encode\h264_encoder.hpp"><Filter>Header Files\encode</Filter></ClInclude>
+    <ClInclude Include="input\input_controller.h"><Filter>Header Files\input</Filter></ClInclude>
+    <ClInclude Include="capture\capture_rgb_heuristics.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="encode\h264_avcc_utils.h"><Filter>Header Files\encode</Filter></ClInclude>
+    <ClInclude Include="session\remote_process_stream_source.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="session\remote_process_session.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="session\session_health_policy.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="session\sample_output_state.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="common\rpc_time.h"><Filter>Header Files\common</Filter></ClInclude>
+    <ClInclude Include="common\runtime_config.h"><Filter>Header Files\common</Filter></ClInclude>
+    <ClInclude Include="common\window_rect_utils.h"><Filter>Header Files\common</Filter></ClInclude>
+    <ClInclude Include="source\silence_opus_source.h"><Filter>Header Files\source</Filter></ClInclude>
+    <ClInclude Include="source\stream.h"><Filter>Header Files\source</Filter></ClInclude>
+    <ClInclude Include="encode\video_encode_pipeline.h"><Filter>Header Files\encode</Filter></ClInclude>
+    <ClInclude Include="capture\window_frame_grabber.h"><Filter>Header Files\capture</Filter></ClInclude>
+    <ClInclude Include="transport\webrtc_socket.h"><Filter>Header Files\transport</Filter></ClInclude>
   </ItemGroup>
 </Project>
