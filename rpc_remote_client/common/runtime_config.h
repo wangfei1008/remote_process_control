@@ -20,9 +20,23 @@ inline std::string trim(std::string value)
 inline std::unordered_map<std::string, std::string> load_key_values()
 {
     std::unordered_map<std::string, std::string> map;
-    std::ifstream input("rpc_config.ini");
-    if (!input.is_open()) {
-        input.open("remote_process_control/rpc_config.ini");
+    std::ifstream input;
+    const char* candidates[] = {
+        "rpc_config.ini",
+        "./rpc_config.ini",
+        "../rpc_config.ini",
+        "../../rpc_config.ini",
+        "rpc_remote_client/rpc_config.ini",
+        "../rpc_remote_client/rpc_config.ini",
+        "../../rpc_remote_client/rpc_config.ini",
+        "remote_process_control/rpc_config.ini",
+        "../remote_process_control/rpc_config.ini",
+        "../../remote_process_control/rpc_config.ini",
+    };
+    for (const char* c : candidates) {
+        input.open(c);
+        if (input.is_open()) break;
+        input.clear();
     }
     if (!input.is_open()) return map;
 

@@ -6,6 +6,7 @@
 #include <shared_mutex>
 #include "transport/dispatch_queue.hpp"
 #include "source/stream.h"
+#include "transport/file_transfer_service.h"
 
 typedef struct ClientTrackData 
 {
@@ -41,7 +42,9 @@ public:
     ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> pc, std::weak_ptr<rtc::WebSocket> ws, std::string id,
                          request_control_callback requestControl,
                          release_control_callback releaseControl,
-                         is_controller_callback isController);
+                         is_controller_callback isController,
+                         std::shared_ptr<FileTransferService> file_transfer_service,
+                         bool enable_media_tracks = true);
 
     void set_state(State state);
     State get_state();
@@ -82,6 +85,8 @@ private:
     request_control_callback m_request_control_callback;
     release_control_callback m_release_control_callback;
     is_controller_callback m_is_controller_callback;
+    std::shared_ptr<FileTransferService> m_file_transfer_service;
+    bool m_enable_control = true;
 };
 
 

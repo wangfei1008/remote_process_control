@@ -14,7 +14,7 @@
 - **信令服务器（WebSocket Relay，Qt）**
   - `./signaling-server-qt/` — `SignalingServer` 门面 + `core/ClientRegistry` + `core/SignalingRelay`
 - **服务器客户端（Windows：启动进程、采集窗口、H264 推流、输入注入）**
-  - `./remote_process_control/`（VS 工程：`remote_process_control.vcxproj`）
+  - `./remote_process_control/`（VS 工程：`rpc_remote_client.vcxproj`）
 
 详细分层与扩展点见 **`docs/ARCHITECTURE.md`**。
 
@@ -157,9 +157,9 @@ flowchart TB
 - 默认监听：`0.0.0.0:9090`
 - 也可传参：`signaling-server.exe <host> <port>`
 
-### 2）启动 Windows 客户端（remote_process_control）
+### 2）启动 Windows 客户端（rpc_remote_client）
 
-用 Visual Studio 打开 `remote_process_control.sln`，编译运行 `remote_process_control` 工程。
+用 Visual Studio 打开 `remote_process_control.sln`，编译运行 `rpc_remote_client` 工程。
 
 启动后会连接信令服务器（默认写死为 `127.0.0.1:9090`，可按需改为你的信令服务器地址）。
 

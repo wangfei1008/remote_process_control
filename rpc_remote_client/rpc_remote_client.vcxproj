@@ -27,6 +27,7 @@
     <ClCompile Include="capture\capture_coordinator.cpp" />
     <ClCompile Include="capture\capture_discard_policy.cpp" />
     <ClCompile Include="transport\dispatch_queue.cpp" />
+    <ClCompile Include="transport\file_transfer_service.cpp" />
     <ClCompile Include="encode\encoder_layout_policy.cpp" />
     <ClCompile Include="capture\frame_sanitizer.cpp" />
     <ClCompile Include="policy\frame_pacing_policy.cpp" />
@@ -54,6 +55,7 @@
     <ClInclude Include="capture\capture_coordinator.h" />
     <ClInclude Include="capture\capture_discard_policy.h" />
     <ClInclude Include="transport\dispatch_queue.hpp" />
+    <ClInclude Include="transport\file_transfer_service.h" />
     <ClInclude Include="encode\encoder_layout_policy.h" />
     <ClInclude Include="capture\frame_sanitizer.h" />
     <ClInclude Include="policy\frame_pacing_policy.h" />
@@ -78,7 +80,8 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{3be43649-3f31-4270-aba9-4e842d121b86}</ProjectGuid>
-    <RootNamespace>ConsoleApplication1</RootNamespace>
+    <RootNamespace>RpcRemoteClient</RootNamespace>
+    <TargetName>rpc_remote_client</TargetName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />

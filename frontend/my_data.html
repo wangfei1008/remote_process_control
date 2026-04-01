@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的数据</title>
+    <style>
+        :root {
+            --bg: #0b1220;
+            --panel: #101a2e;
+            --panel-soft: #15213a;
+            --text: #e8eefc;
+            --text-soft: #9fb2d9;
+            --line: #223252;
+            --accent: #4f8cff;
+            --accent-soft: #1f4a96;
+            --ok: #22c55e;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: radial-gradient(1200px 700px at 20% -10%, #1e2d50 0%, var(--bg) 55%);
+            color: var(--text);
+        }
+        .wrap {
+            display: grid;
+            grid-template-columns: 1fr 360px;
+            grid-template-rows: auto 1fr 260px;
+            height: 100vh;
+            gap: 12px;
+            padding: 12px;
+        }
+        .card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+        }
+        .topbar {
+            grid-column: 1 / 3;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 10px;
+        }
+        .btn, input[type="file"] {
+            background: var(--panel-soft);
+            color: var(--text);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 7px 12px;
+            font-size: 13px;
+        }
+        .btn {
+            cursor: pointer;
+            transition: all .15s ease;
+        }
+        .btn:hover { border-color: var(--accent); background: #1a2d52; }
+        #btn-download { background: #16315f; border-color: #2b5db5; min-width: 84px; font-weight: 600; }
+        #btn-upload { background: #1c3b29; border-color: #2f6b47; min-width: 84px; font-weight: 600; }
+        #btn-download:disabled { opacity: .5; cursor: not-allowed; }
+        .section-title {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--line);
+            font-weight: 600;
+            letter-spacing: .2px;
+        }
+        .section-title small {
+            color: var(--text-soft);
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        .content-main {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr);
+        }
+        .content-preview {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+        .log-wrap { min-height: 0; display: flex; flex-direction: column; }
+        .log-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--line);
+        }
+        .log-toolbar select, .log-toolbar button {
+            background: #132544;
+            color: var(--text);
+            border: 1px solid #264173;
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 12px;
+        }
+        .log-toolbar button { cursor: pointer; }
+        .log-list {
+            margin: 0;
+            padding: 8px 8px 0;
+            overflow: auto;
+            height: 100%;
+        }
+        .log-group {
+            border: 1px solid var(--line);
+            background: rgba(79, 140, 255, 0.06);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+        .log-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+            user-select: none;
+            background: rgba(255,255,255,0.02);
+        }
+        .log-group-title {
+            font-size: 12px;
+            color: #cfe1ff;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .log-group-latest {
+            font-size: 11px;
+            color: #87a8e4;
+            white-space: nowrap;
+        }
+        .log-group-body {
+            border-top: 1px solid rgba(255,255,255,0.06);
+            padding: 6px 8px;
+        }
+        .log-item {
+            border: 1px solid var(--line);
+            background: rgba(12, 23, 42, 0.55);
+            border-radius: 8px;
+            padding: 6px 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        .log-time { color: #8fb0ef; margin-right: 8px; }
+        .log-empty {
+            color: #7894c7;
+            font-size: 12px;
+            padding: 8px;
+        }
+        .main {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            min-width: 0;
+            min-height: 0;
+        }
+        .list { overflow: auto; position: relative; min-height: 0; }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 13px;
+        }
+        thead th {
+            position: sticky;
+            top: 0;
+            z-index: 8;
+            background: #10203b;
+            color: #c6d7f7;
+            font-weight: 600;
+            box-shadow: 0 1px 0 #1b2b49;
+        }
+        th, td {
+            border-bottom: 1px solid #1b2b49;
+            padding: 10px;
+            text-align: left;
+        }
+        tbody tr { transition: background .12s ease; }
+        tbody tr:hover { background: #162746; }
+        .panel { min-height: 0; display: grid; grid-template-rows: auto 1fr; }
+        .panel-title {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--line);
+            font-weight: 600;
+        }
+        pre {
+            margin: 0;
+            padding: 12px 14px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow: auto;
+            color: var(--text-soft);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .muted { color: var(--text-soft); }
+        @media (max-width: 1100px) {
+            .wrap { grid-template-columns: 1fr; grid-template-rows: auto 1fr 260px 240px; }
+            .topbar, .content-main, .content-preview, .log-wrap { grid-column: 1 / 2 !important; }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="topbar card">
+        <button id="btn-refresh" class="btn">刷新</button>
+        <button id="btn-download" class="btn" disabled>下载</button>
+        <button id="btn-upload" class="btn">上传</button>
+        <input id="upload-input" type="file" multiple hidden>
+        <span id="upload-progress" class="muted">上传进度: -</span>
+    </div>
+    <div class="main card content-main" style="grid-column:1;grid-row:2;">
+        <div class="section-title">文件列表<small id="current-folder-name">/</small></div>
+        <div class="list">
+            <table>
+                <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间</th></tr></thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel card content-preview" style="grid-column:2;grid-row:2;">
+        <div class="panel-title">文件预览</div>
+        <pre id="preview" class="muted">请选择文本文件进行预览</pre>
+    </div>
+    <div class="card log-wrap" style="grid-column:1 / 3;grid-row:3;">
+        <div class="section-title">传输日志（最新在上）</div>
+        <div class="log-toolbar">
+            <select id="log-filter">
+                <option value="all">全部</option>
+                <option value="upload">仅上传</option>
+                <option value="download">仅下载</option>
+                <option value="error">仅错误</option>
+            </select>
+            <button id="log-toggle-collapse" type="button">全部收起</button>
+            <button id="log-clear" type="button">清空日志</button>
+        </div>
+        <div id="log-list" class="log-list"></div>
+    </div>
+</div>
+<script src="./my_data.js"></script>
+</body>
+</html>

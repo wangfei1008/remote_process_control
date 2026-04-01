@@ -4,6 +4,7 @@
 #include "input/input_controller.h"
 #include "session/remote_process_stream_source.h"
 #include "source/silence_opus_source.h"
+#include "common/runtime_config.h"
 
 using namespace std::chrono_literals;
 
@@ -14,6 +15,10 @@ WebRTCSocket::WebRTCSocket()
     , m_thread_queue("WebRTCSocket")
 {
 	rtc::InitLogger(rtc::LogLevel::Info);
+    FileTransferService::Options options;
+    options.data_root = runtime_config::get_string("RPC_DATA_ROOT", "D:\\rpc_data");
+    options.default_chunk_size = static_cast<std::size_t>(runtime_config::get_int("RPC_FILE_CHUNK_SIZE", 512 * 1024));
+    m_file_transfer_service = std::make_shared<FileTransferService>(std::move(options));
 }
 
 void WebRTCSocket::start(const std::string& ip, int port)
@@ -95,10 +100,24 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
     if (it == message.end())return;
 
     std::string type = it->get<std::string>();
-    if (type == "request") // 启动会话请求
+    if (type == "request" || type == "file_request") // 启动会话请求
     {
+        const bool media_enabled = (type == "request");
         // 每次请求都从干净状态开始，确保是全新会话。
-        _stop_and_reset_stream();
+        if (media_enabled) {
+            _stop_and_reset_stream();
+        } else {
+            if (auto it_client = m_clients.find(id); it_client != m_clients.end()) {
+                try {
+                    if (auto old_pc = it_client->second->get_peer_connection()) {
+                        old_pc->close();
+                    }
+                } catch (...) {
+                }
+                m_clients.erase(it_client);
+                _release_control(id);
+            }
+        }
 
         // 前端可选传入进程路径
         if (message.contains("exePath")) {
@@ -115,15 +134,19 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
         }
 
         auto pc = _init_peer_connection(id);
-		auto client = std::make_shared<ClientPeerConnection>(
+        auto client = std::make_shared<ClientPeerConnection>(
             pc, make_weak_ptr(m_ws), id,
             [this](const std::string& clientId, std::shared_ptr<rtc::DataChannel> dc) { return _request_control(clientId, dc); },
             [this](const std::string& clientId) { _release_control(clientId); },
-            [this](const std::string& clientId) { return _is_controller(clientId); }
+            [this](const std::string& clientId) { return _is_controller(clientId); },
+            m_file_transfer_service,
+            media_enabled
         );
-        client->set_callback([this]() {
-            return _get_or_create_stream();
-        });
+        if (media_enabled) {
+            client->set_callback([this]() {
+                return _get_or_create_stream();
+            });
+        }
 
         m_clients.emplace(id, client);
         pc->setLocalDescription();

@@ -166,6 +166,19 @@
                 icon: '📝',
             }];
         }
+        appDefs.unshift({
+            kind: 'my_data',
+            name: '我的数据',
+            icon: '📁',
+            launchPath: (function () {
+                const qs = new URLSearchParams(window.location.search);
+                const signaling = qs.get('signaling');
+                const p = new URLSearchParams();
+                if (signaling) p.set('signaling', signaling);
+                const suffix = p.toString();
+                return './my_data.html' + (suffix ? ('?' + suffix) : '');
+            })(),
+        });
 
         function makeIframeSrc(exePath) {
             const qs = new URLSearchParams(window.location.search);
@@ -230,7 +243,7 @@
 
             iconWrap.appendChild(iconBox);
             iconWrap.appendChild(label);
-            iconWrap.title = app.exePath;
+            iconWrap.title = app.exePath || app.name;
 
             iconWrap.addEventListener('dblclick', function (e) {
                 e.stopPropagation();
@@ -270,7 +283,7 @@
             btn.style.alignItems = 'center';
             btn.style.justifyContent = 'center';
             btn.style.boxShadow = '0 4px 12px rgba(110,142,251,0.15)';
-            btn.title = app.exePath;
+            btn.title = app.exePath || app.name;
 
             const ic = doc.createElement('div');
             ic.textContent = app.icon || '⬚';
@@ -386,7 +399,7 @@
         };
 
         function openAppWindow(app) {
-            if (!app || !app.exePath) return;
+            if (!app || (!app.exePath && !app.launchPath)) return;
             if (windows.size >= maxWindows) {
                 console.warn('[desktop] 已达最大并发窗口数 (' + maxWindows + ')');
                 return;
@@ -394,15 +407,26 @@
 
             const winId = 'win_' + randomId(8);
             const idx = windows.size;
+            const isMyData = app.kind === 'my_data' || (app.launchPath && app.launchPath.indexOf('my_data.html') >= 0);
+            const viewportW = Math.max(800, window.innerWidth || 1280);
+            const viewportH = Math.max(600, window.innerHeight || 720);
+            const defaultW = isMyData ? Math.max(960, Math.floor(viewportW * 0.82)) : 640;
+            const defaultH = isMyData ? Math.max(620, Math.floor((viewportH - 48) * 0.8)) : 400;
+            const startLeft = isMyData
+                ? Math.max(12, Math.floor((viewportW - defaultW) / 2))
+                : (40 + idx * 24);
+            const startTop = isMyData
+                ? Math.max(12, Math.floor(((viewportH - 48) - defaultH) / 2))
+                : (40 + idx * 24);
 
             const winEl = doc.createElement('div');
             winEl.className = 'desktop-window';
             winEl.dataset.winId = winId;
             winEl.style.position = 'absolute';
-            winEl.style.left = String(40 + idx * 24) + 'px';
-            winEl.style.top = String(40 + idx * 24) + 'px';
-            winEl.style.width = '640px';
-            winEl.style.height = '400px';
+            winEl.style.left = String(startLeft) + 'px';
+            winEl.style.top = String(startTop) + 'px';
+            winEl.style.width = String(defaultW) + 'px';
+            winEl.style.height = String(defaultH) + 'px';
             winEl.style.borderRadius = '12px';
             winEl.style.overflow = 'hidden';
             winEl.style.border = '1px solid rgba(255,255,255,0.10)';
@@ -415,9 +439,9 @@
             titlebar.style.display = 'flex';
             titlebar.style.alignItems = 'center';
             titlebar.style.justifyContent = 'space-between';
-            titlebar.style.padding = '0 10px';
-            titlebar.style.background = 'rgba(20,28,44,0.95)';
-            titlebar.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+            titlebar.style.padding = '0 8px 0 10px';
+            titlebar.style.background = 'linear-gradient(180deg, rgba(33,47,76,0.96), rgba(23,35,58,0.96))';
+            titlebar.style.borderBottom = '1px solid rgba(255,255,255,0.08)';
             titlebar.style.cursor = 'move';
 
             const title = doc.createElement('div');
@@ -425,6 +449,7 @@
             title.style.color = '#e7eefc';
             title.style.fontWeight = '700';
             title.style.fontSize = '12px';
+            title.style.letterSpacing = '0.2px';
             title.style.whiteSpace = 'nowrap';
             title.style.overflow = 'hidden';
             title.style.textOverflow = 'ellipsis';
@@ -433,30 +458,49 @@
             const btns = doc.createElement('div');
             btns.style.display = 'flex';
             btns.style.alignItems = 'center';
-            btns.style.gap = '8px';
+            btns.style.gap = '6px';
             titlebar.appendChild(btns);
 
             const minBtn = doc.createElement('button');
             minBtn.textContent = '—';
-            minBtn.style.width = '28px';
-            minBtn.style.height = '22px';
-            minBtn.style.borderRadius = '6px';
-            minBtn.style.border = '1px solid rgba(255,255,255,0.10)';
-            minBtn.style.background = '#182033';
-            minBtn.style.color = '#e7eefc';
+            minBtn.title = '最小化';
+            minBtn.setAttribute('aria-label', '最小化');
+            minBtn.style.width = '18px';
+            minBtn.style.height = '18px';
+            minBtn.style.borderRadius = '999px';
+            minBtn.style.border = '1px solid rgba(255,255,255,0.26)';
+            minBtn.style.background = '#f6c344';
+            minBtn.style.boxShadow = 'inset 0 0 0 1px rgba(0,0,0,0.1)';
             minBtn.style.cursor = 'pointer';
+            minBtn.style.padding = '0';
+            minBtn.style.fontSize = '12px';
+            minBtn.style.lineHeight = '16px';
+            minBtn.style.fontWeight = '700';
+            minBtn.style.color = 'rgba(60,45,0,0.75)';
             btns.appendChild(minBtn);
 
             const closeBtn = doc.createElement('button');
             closeBtn.textContent = '×';
-            closeBtn.style.width = '28px';
-            closeBtn.style.height = '22px';
-            closeBtn.style.borderRadius = '6px';
-            closeBtn.style.border = '1px solid rgba(255,255,255,0.10)';
-            closeBtn.style.background = '#2c1a1a';
-            closeBtn.style.color = '#ffd6d6';
+            closeBtn.title = '关闭';
+            closeBtn.setAttribute('aria-label', '关闭');
+            closeBtn.style.width = '18px';
+            closeBtn.style.height = '18px';
+            closeBtn.style.borderRadius = '999px';
+            closeBtn.style.border = '1px solid rgba(255,255,255,0.26)';
+            closeBtn.style.background = '#ef6a64';
+            closeBtn.style.boxShadow = 'inset 0 0 0 1px rgba(0,0,0,0.1)';
             closeBtn.style.cursor = 'pointer';
+            closeBtn.style.padding = '0';
+            closeBtn.style.fontSize = '12px';
+            closeBtn.style.lineHeight = '16px';
+            closeBtn.style.fontWeight = '700';
+            closeBtn.style.color = 'rgba(80,0,0,0.75)';
             btns.appendChild(closeBtn);
+
+            minBtn.addEventListener('mouseenter', function () { minBtn.style.filter = 'brightness(1.05)'; });
+            minBtn.addEventListener('mouseleave', function () { minBtn.style.filter = 'none'; });
+            closeBtn.addEventListener('mouseenter', function () { closeBtn.style.filter = 'brightness(1.05)'; });
+            closeBtn.addEventListener('mouseleave', function () { closeBtn.style.filter = 'none'; });
 
             const content = doc.createElement('div');
             content.style.position = 'absolute';
@@ -471,7 +515,7 @@
             iframe.style.border = '0';
             iframe.style.display = 'block';
             iframe.tabIndex = 0;
-            iframe.src = makeIframeSrc(app.exePath);
+            iframe.src = app.launchPath ? app.launchPath : makeIframeSrc(app.exePath);
             content.appendChild(iframe);
 
             const resizer = doc.createElement('div');
@@ -494,6 +538,24 @@
             // Drag
             let dragging = false;
             let dragStartX = 0, dragStartL = 0, dragStartY = 0, dragStartT = 0;
+            let resizing = false;
+            let resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
+
+            function beginPointerInteraction(cursorStyle) {
+                // 避免鼠标进入 iframe 后丢失 mouseup，导致“松开后仍在拖动/缩放”
+                iframe.style.pointerEvents = 'none';
+                doc.body.style.userSelect = 'none';
+                doc.body.style.cursor = cursorStyle || 'default';
+            }
+
+            function endPointerInteraction() {
+                dragging = false;
+                resizing = false;
+                iframe.style.pointerEvents = 'auto';
+                doc.body.style.userSelect = '';
+                doc.body.style.cursor = '';
+            }
+
             titlebar.addEventListener('mousedown', function (e) {
                 if (e.button !== 0) return;
                 dragging = true;
@@ -502,6 +564,7 @@
                 dragStartY = e.clientY;
                 dragStartL = parseInt(winEl.style.left || '0', 10) || 0;
                 dragStartT = parseInt(winEl.style.top || '0', 10) || 0;
+                beginPointerInteraction('move');
                 e.preventDefault();
             });
             doc.addEventListener('mousemove', function (e) {
@@ -511,11 +574,11 @@
                 winEl.style.left = String(dragStartL + dx) + 'px';
                 winEl.style.top = String(dragStartT + dy) + 'px';
             });
-            doc.addEventListener('mouseup', function () { dragging = false; });
+            doc.addEventListener('mouseup', endPointerInteraction);
+            window.addEventListener('mouseup', endPointerInteraction);
+            window.addEventListener('blur', endPointerInteraction);
 
             // Resize (bottom-right)
-            let resizing = false;
-            let resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
             resizer.addEventListener('mousedown', function (e) {
                 if (e.button !== 0) return;
                 resizing = true;
@@ -524,6 +587,7 @@
                 resizeStartY = e.clientY;
                 resizeStartW = parseInt(winEl.style.width || '640', 10) || 640;
                 resizeStartH = parseInt(winEl.style.height || '400', 10) || 400;
+                beginPointerInteraction('nwse-resize');
                 e.preventDefault();
                 e.stopPropagation();
             });
@@ -536,7 +600,7 @@
                 winEl.style.width = String(nw) + 'px';
                 winEl.style.height = String(nh) + 'px';
             });
-            doc.addEventListener('mouseup', function () { resizing = false; });
+            doc.addEventListener('mouseup', endPointerInteraction);
 
             // Focus
             winEl.addEventListener('mousedown', function () { bringToFront(winEl); });

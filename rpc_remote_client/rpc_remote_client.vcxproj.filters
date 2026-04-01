@@ -71,6 +71,7 @@
     <ClCompile Include="capture\capture_coordinator.cpp"><Filter>Source Files\capture</Filter></ClCompile>
     <ClCompile Include="capture\capture_discard_policy.cpp"><Filter>Source Files\capture</Filter></ClCompile>
     <ClCompile Include="transport\dispatch_queue.cpp"><Filter>Source Files\transport</Filter></ClCompile>
+    <ClCompile Include="transport\file_transfer_service.cpp"><Filter>Source Files\transport</Filter></ClCompile>
     <ClCompile Include="encode\encoder_layout_policy.cpp"><Filter>Source Files\encode</Filter></ClCompile>
     <ClCompile Include="capture\frame_sanitizer.cpp"><Filter>Source Files\capture</Filter></ClCompile>
     <ClCompile Include="policy\frame_pacing_policy.cpp"><Filter>Source Files\policy</Filter></ClCompile>
@@ -98,6 +99,7 @@
     <ClInclude Include="capture\capture_coordinator.h"><Filter>Header Files\capture</Filter></ClInclude>
     <ClInclude Include="capture\capture_discard_policy.h"><Filter>Header Files\capture</Filter></ClInclude>
     <ClInclude Include="transport\dispatch_queue.hpp"><Filter>Header Files\transport</Filter></ClInclude>
+    <ClInclude Include="transport\file_transfer_service.h"><Filter>Header Files\transport</Filter></ClInclude>
     <ClInclude Include="encode\encoder_layout_policy.h"><Filter>Header Files\encode</Filter></ClInclude>
     <ClInclude Include="capture\frame_sanitizer.h"><Filter>Header Files\capture</Filter></ClInclude>
     <ClInclude Include="policy\frame_pacing_policy.h"><Filter>Header Files\policy</Filter></ClInclude>

@@ -21,7 +21,9 @@ ClientTrack::ClientTrack(std::string id, std::shared_ptr<ClientTrackData> trackD
 ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> pc, std::weak_ptr<rtc::WebSocket> ws, std::string id,
                                            request_control_callback requestControl,
                                            release_control_callback releaseControl,
-                                           is_controller_callback isController)
+                                           is_controller_callback isController,
+                                           std::shared_ptr<FileTransferService> file_transfer_service,
+                                           bool enable_media_tracks)
     : m_peer_connection(pc)
     , m_state(State::Waiting)
     , m_id(std::move(id))
@@ -29,23 +31,27 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
     , m_request_control_callback(std::move(requestControl))
     , m_release_control_callback(std::move(releaseControl))
     , m_is_controller_callback(std::move(isController))
+    , m_file_transfer_service(std::move(file_transfer_service))
+    , m_enable_control(enable_media_tracks)
 {
-    _add_video(102, 1, "video-stream", "stream1", [this]()
-         {
-             m_thread_queue.dispatch([this](){
-                 std::cout << "[track] video open for client=" << m_id << std::endl;
-				 _add_to_stream(true);
-                });
+    if (enable_media_tracks) {
+        _add_video(102, 1, "video-stream", "stream1", [this]()
+             {
+                 m_thread_queue.dispatch([this](){
+                     std::cout << "[track] video open for client=" << m_id << std::endl;
+                     _add_to_stream(true);
+                    });
 
-        });
+            });
 
-    _add_audio(111, 2, "audio-stream", "stream1", [this]() 
-        {
-            m_thread_queue.dispatch([this]() {
-                std::cout << "[track] audio open for client=" << m_id << std::endl;
-				_add_to_stream(false);
-                });
-        });
+        _add_audio(111, 2, "audio-stream", "stream1", [this]()
+            {
+                m_thread_queue.dispatch([this]() {
+                    std::cout << "[track] audio open for client=" << m_id << std::endl;
+                    _add_to_stream(false);
+                    });
+            });
+    }
 
     auto dc = m_peer_connection->createDataChannel("ping-pong");
     const std::string clientId = m_id;
@@ -55,7 +61,7 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
     dc->onOpen([clientId, wdc = make_weak_ptr(dc), this]() {
         if (auto ch = wdc.lock()) {
             ch->send("Ping");
-            if (m_request_control_callback) {
+            if (m_enable_control && m_request_control_callback) {
                 const bool ok = m_request_control_callback(clientId, ch);
                 if (ok) {
                     ch->send(nlohmann::json({ {"type", "controlGranted"} }).dump());
@@ -69,15 +75,19 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
     dc->onMessage(nullptr, [clientId, wdc = make_weak_ptr(dc), this](std::string msg) {
         if (auto dc = wdc.lock()) 
         {
-			std::cout << "DataChannel message from " << clientId << ": " << msg << std::endl;
             try {                
-                    if (msg.find("Pong") != -1) {
+                    // 仅处理纯文本心跳 Pong，避免误匹配文件分片 JSON/base64 内容中的 "Pong" 子串。
+                    if (msg == "Pong" || msg.rfind("Pong ", 0) == 0) {
                         dc->send("Ping");// 仅为 Pong 响应，直接忽略					
                         return;
                     }
 
                 auto json = nlohmann::json::parse(msg);
                 const std::string type = json.value("type", "");
+                if (m_file_transfer_service && m_file_transfer_service->can_handle_type(type)) {
+                    m_file_transfer_service->handle_message(clientId, json, dc);
+                    return;
+                }
                 if (type == "latPing") {
                     const int64_t srv = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -90,6 +100,10 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
                     return;
                 }
                 if (type == "controlRequest") {
+                    if (!m_enable_control) {
+                        dc->send(nlohmann::json({ {"type","controlDenied"} }).dump());
+                        return;
+                    }
                     const bool ok = m_request_control_callback ? m_request_control_callback(clientId, dc) : false;
                     if (ok) {
                         dc->send(nlohmann::json({ {"type","controlGranted"} }).dump());

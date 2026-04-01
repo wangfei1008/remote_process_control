@@ -6,6 +6,7 @@
 #include "nlohmann/json.hpp"
 #include "transport/dispatch_queue.hpp"
 #include "transport/client_peer_connection.h"
+#include "transport/file_transfer_service.h"
 #include <unordered_map>
 #include <mutex>
 
@@ -46,5 +47,6 @@ private:
 	// 并发控制权限限制
 	std::mutex m_control_mtx;
 	std::string m_controller_id;
+    std::shared_ptr<FileTransferService> m_file_transfer_service;
 };
 
