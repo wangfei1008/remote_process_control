@@ -38,27 +38,37 @@ RemoteProcessStreamSource::RemoteProcessStreamSource()
 
     m_hw_capture_supported = (rpc_probe_dxgi_capture_support() && m_dxgiCapture.is_available());
     {
-        std::string mode = runtime_config::get_string("RPC_CAPTURE_BACKEND", "");
-        if (mode.empty()) {
-            m_hw_capture_requested = m_hw_capture_supported; // 默认自动模式
-            m_lock_capture_backend = false;
-        } else {
+        // 采集后端仅支持两种模式：dxgi / gdi。
+        // 规则：默认 dxgi；若系统不支持 dxgi，则退回 gdi。
+        std::string mode = runtime_config::get_string("RPC_CAPTURE_BACKEND", "dxgi");
         std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (mode == "dxgi") {
-            m_hw_capture_requested = true;
-            m_lock_capture_backend = true;
-            m_locked_use_hw_capture = true;
-        } else if (mode == "gdi") {
+
+        // 将“auto/未知模式”彻底删掉：未知值按 dxgi 处理。
+        if (mode == "gdi") {
             m_hw_capture_requested = false;
             m_lock_capture_backend = true;
             m_locked_use_hw_capture = false;
         } else {
-            m_hw_capture_requested = m_hw_capture_supported; // 自动模式
-            m_lock_capture_backend = false;
-        }
+            // mode == "dxgi" 或未知：优先 dxgi；若探测不支持，decide_use_hw_capture 会自动落到 gdi。
+            m_hw_capture_requested = true;
+            m_lock_capture_backend = true;
+            m_locked_use_hw_capture = true;
         }
     }
     m_allow_pid_rebind_by_exename = runtime_config::get_bool("RPC_ALLOW_CAPTURE_PID_REBIND", m_allow_pid_rebind_by_exename);
+    m_capture_degrade_ms = static_cast<uint32_t>((std::max)(
+        1, runtime_config::get_int("RPC_CAPTURE_DEGRADE_MS", static_cast<int>(m_capture_degrade_ms))));
+    m_window_missing_exit_grace_ms = static_cast<uint32_t>((std::max)(
+        0, runtime_config::get_int("RPC_WINDOW_MISSING_EXIT_GRACE_MS", static_cast<int>(m_window_missing_exit_grace_ms))));
+    m_pid_rebind_startup_window_ms = static_cast<uint32_t>((std::max)(
+        0, runtime_config::get_int("RPC_PID_REBIND_STARTUP_WINDOW_MS", static_cast<int>(m_pid_rebind_startup_window_ms))));
+    if (m_pid_rebind_startup_window_ms > 0 && m_pid_rebind_startup_window_ms < 5000) {
+        // 避免配置过小导致慢启动应用在首帧前失去 PID 重绑定机会。
+        m_pid_rebind_startup_window_ms = 5000;
+    }
+    m_pre_video_reselect_empty_threshold = static_cast<uint32_t>((std::max)(
+        5, runtime_config::get_int("RPC_PRE_VIDEO_RESELECT_EMPTY_THRESHOLD",
+                                   static_cast<int>(m_pre_video_reselect_empty_threshold))));
     m_hw_capture_active = (m_hw_capture_requested && m_hw_capture_supported);
     m_capture_backend_state.configure(
         m_hw_capture_supported,
@@ -123,12 +133,13 @@ void RemoteProcessStreamSource::start()
     m_running = true;
     m_had_successful_video = false;
     m_exit_notified = false;
-    m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 15000; // 仅在启动窗口期允许 PID 重绑定
+    m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + m_pid_rebind_startup_window_ms; // 仅在启动窗口期允许 PID 重绑定
     m_window_missing_since_unix_ms = 0;
     m_sample_output_state.reset_for_stream_start();
     m_last_good_rgb_frame.clear();
     m_last_good_rgb_w = 0;
     m_last_good_rgb_h = 0;
+    m_pre_video_empty_frame_streak = 0;
     m_video_encode_pipeline.reset_for_stream_start();
     m_capture_backend_state.reset_for_stream_start();
 
@@ -166,6 +177,17 @@ void RemoteProcessStreamSource::notify_remote_exit()
 
 bool RemoteProcessStreamSource::tick_window_and_health(std::chrono::steady_clock::time_point& last_no_window_diag)
 {
+    if (m_mainWindow && !m_remote_process_session.is_window_viable_for_capture(m_mainWindow)) {
+        if (!m_had_successful_video) {
+            std::cout << "[proc][diag] current main window not viable before first video, force reselection"
+                      << " hwnd=" << reinterpret_cast<void*>(m_mainWindow)
+                      << " capture_pid=" << m_capturePid
+                      << " target_exe=" << m_targetExeBaseName
+                      << std::endl;
+        }
+        m_mainWindow = nullptr;
+    }
+
     if (m_had_successful_video && !m_exit_notified) {
         if (m_capturePid != 0) {
             HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_capturePid);
@@ -177,7 +199,7 @@ bool RemoteProcessStreamSource::tick_window_and_health(std::chrono::steady_clock
                 CloseHandle(hProc);
             }
         }
-        if (m_mainWindow && !IsWindow(m_mainWindow)) {
+        if (m_mainWindow && !m_remote_process_session.is_window_viable_for_capture(m_mainWindow)) {
             m_mainWindow = nullptr;
         }
     }
@@ -193,7 +215,7 @@ bool RemoteProcessStreamSource::tick_window_and_health(std::chrono::steady_clock
 
         if (!m_mainWindow) {
             SessionHealthPolicy::maybe_log_no_window(
-                m_remote_process_session, m_capturePid, last_no_window_diag);
+                m_remote_process_session, m_capturePid, m_targetExeBaseName, last_no_window_diag);
             m_sample_output_state.clear_current();
 
             const uint64_t nowMs = rpc_unix_epoch_ms();
@@ -273,8 +295,7 @@ bool RemoteProcessStreamSource::discard_if_capture_too_slow(std::chrono::steady_
                                                  bool use_hw_capture)
 {
     int capture_ms = 0;
-    if (!CaptureDiscardPolicy::should_discard_if_capture_too_slow(
-            m_had_successful_video, m_sample_output_state.has_last_good(), t_cap_begin, t_after_cap, capture_ms)) {
+    if (!CaptureDiscardPolicy::should_discard_if_capture_too_slow(m_had_successful_video, m_sample_output_state.has_last_good(), t_cap_begin, t_after_cap, capture_ms)) {
         return false;
     }
 
@@ -289,13 +310,26 @@ bool RemoteProcessStreamSource::discard_if_capture_too_slow(std::chrono::steady_
 bool RemoteProcessStreamSource::discard_if_empty_frame(const std::vector<uint8_t>& frame, int width, int height)
 {
     if (!CaptureDiscardPolicy::should_discard_if_empty_frame(frame, width, height)) return false;
+    if (!m_had_successful_video) {
+        ++m_pre_video_empty_frame_streak;
+        if (m_mainWindow && m_pre_video_empty_frame_streak >= m_pre_video_reselect_empty_threshold) {
+            std::cout << "[proc][diag] pre-video empty frame streak reached, force reselection"
+                      << " streak=" << m_pre_video_empty_frame_streak
+                      << " threshold=" << m_pre_video_reselect_empty_threshold
+                      << " hwnd=" << reinterpret_cast<void*>(m_mainWindow)
+                      << " capture_pid=" << m_capturePid
+                      << " target_exe=" << m_targetExeBaseName
+                      << std::endl;
+            m_pre_video_empty_frame_streak = 0;
+            m_mainWindow = nullptr;
+        }
+    }
     emit_hold_or_empty_sample(true);
     m_sample_output_state.advance_time(get_sample_duration_us());
     return true;
 }
 
-bool RemoteProcessStreamSource::filter_suspicious_frame(std::vector<uint8_t>& frame, int& width, int& height, int& cap_min_left,
-                                            int& cap_min_top)
+bool RemoteProcessStreamSource::filter_suspicious_frame(std::vector<uint8_t>& frame, int& width, int& height, int& cap_min_left, int& cap_min_top)
 {
     const bool pass = FrameSanitizer::sanitize_frame(
         frame,
@@ -374,6 +408,7 @@ void RemoteProcessStreamSource::finalize_encode_rgb(std::vector<uint8_t>& frame,
         m_last_capture_ms = result.capture_ms;
         m_last_encode_ms = result.encode_ms;
         m_last_frame_unix_ms = result.frame_unix_ms;
+        m_pre_video_empty_frame_streak = 0;
         m_had_successful_video = true;
         m_sample_output_state.commit_current_as_last_good();
     } else {
@@ -389,11 +424,15 @@ void RemoteProcessStreamSource::finalize_encode_rgb(std::vector<uint8_t>& frame,
 
 void RemoteProcessStreamSource::load_next_sample()
 {
+    // 1) 流未运行时不再推进采集/编码，避免 stop 后仍触发抓取。
     if (!m_running) return;
 
+    // 2) 窗口与健康：主窗恢复、PID 重绑定、无窗宽限期与远端退出通知；
+    //    若当前无法继续（无窗等），内部会推进时间轴或提前返回。
     static auto last_no_window_diag = std::chrono::steady_clock::now();
     if (!tick_window_and_health(last_no_window_diag)) return;
 
+    // 3) 为单帧采集计时，并据后端状态决定本帧是否走 DXGI（实际路径以 grab 结果为准）。
     int width = 0, height = 0;
     int cap_min_left = 0, cap_min_top = 0;
     const auto t_cap_begin = std::chrono::steady_clock::now();
@@ -402,26 +441,34 @@ void RemoteProcessStreamSource::load_next_sample()
     const bool use_hw_capture = decide_use_hw_capture(cap_now_ms);
     bool used_hw_capture_actual = use_hw_capture;
 
+    // 4) 抓取一帧 RGB（含主窗路径；失败时可能走 hold/空样本，函数返回 false）。
     std::vector<uint8_t> frame;
     if (!grab_rgb_frame(width, height, cap_min_left, cap_min_top, frame, use_hw_capture, used_hw_capture_actual)) return;
 
+    // 5) 调试：按配置在采集后落盘 BMP（不影响主编码路径）。
     const BmpDumpDiag dump_diag = make_dump_diag(used_hw_capture_actual);
     m_bmp_dump_writer.dump_capture_if_needed(frame, width, height, dump_diag);
 
     const auto t_after_cap = std::chrono::steady_clock::now();
+    // 6) 可选：采集过慢则丢弃本帧并推进时间（策略见 CaptureDiscardPolicy）。
     if (discard_if_capture_too_slow(t_cap_begin, t_after_cap, use_hw_capture))
         return;
+    // 7) 空/无效尺寸帧丢弃；首视频前可累积空帧 streak 触发主窗重选。
     if (discard_if_empty_frame(frame, width, height))
         return;
+    // 8) 可疑帧过滤（DXGI 黑帧/顶黑条等）：当前关闭，开启后在此做 GDI 兜底或丢帧。
     if (!filter_suspicious_frame(frame, width, height, cap_min_left, cap_min_top))
         return;
 
     m_bmp_dump_writer.dump_encode_if_needed(frame, width, height, dump_diag);
 
+    // 9) 根据采集分辨率调整编码器布局（含 streak 防抖，避免分辨率抖动）。
     bool applied_layout = false;
     ensure_encoder_layout(width, height, applied_layout);
 
+    // 10) 更新鼠标映射用的屏幕区域，并缓存「上一帧好 RGB」供卫生检查等使用。
     update_fps_pacing_and_mapping(frame, width, height, cap_min_left, cap_min_top);
+    // 11) 缩放/编码为 H264 样本，写入当前 sample 与时间戳，并标记是否已成功出过视频。
     finalize_encode_rgb(frame, width, height, t_cap_begin, t_after_cap, applied_layout);
 }
 

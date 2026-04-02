@@ -43,8 +43,8 @@
             rpcAutostart: false,
             rpcHadVideo: false,
             rpcAutoClosed: false,
-            /** 视频页：10 秒无视频则主动退出（可用 URL ?rpcVideoTimeoutMs= 覆盖） */
-            rpcVideoTimeoutMs: 10000,
+            /** 视频页：默认 60 秒无视频则主动退出（可用 URL ?rpcVideoTimeoutMs= 覆盖） */
+            rpcVideoTimeoutMs: 60000,
             /** 应用模式：WebSocket 多久未连上则关窗（ms），URL ?rpcWsConnectTimeoutMs= */
             rpcWsConnectTimeoutMs: 45000,
             rpcNoVideoTimer: null,
@@ -163,13 +163,13 @@
             const v = getMainVideo(doc);
             if (v) v.srcObject = null;
         }
-        if (ui) logDataChannel(ui, '10 秒无视频流，已退出画面（' + reason + '）');
+        if (ui) logDataChannel(ui, '无视频流超时，已退出画面（' + reason + '）');
     }
 
     function armRpcNoVideoWatchdog(session, doc, ui) {
         if (session.rpcAutoClosed) return;
         clearSessionTimer(session, 'rpcNoVideoTimer');
-        const ms = Math.max(3000, Number(session.rpcVideoTimeoutMs) || 10000);
+        const ms = Math.max(3000, Number(session.rpcVideoTimeoutMs) || 60000);
         session.rpcVideoPageOpenedAt = Date.now();
         session.rpcNoVideoTimer = setInterval(function () {
             if (session.rpcAutoClosed) return;
@@ -224,8 +224,8 @@
         session.rpcWindowMode = rpcWindow;
         session.rpcAutostart = rpcAutostart;
         if (rpcWindow) {
-            const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '10000', 10);
-            session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 10000;
+            const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '60000', 10);
+            session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 60000;
 
             // Pass app exe path from URL for multi-window desktop container.
             const exePathParam = params.get('exePath');
@@ -278,13 +278,13 @@
                 doc.title = '远程应用';
             }
         }
-        /* 双击后再连：默认 10s 内须出画；信令未连上也用同档超时（可用 URL 覆盖） */
+        /* 双击后再连：默认 60s 内须出画；信令未连上仍维持短超时（可用 URL 覆盖） */
         const vtParam = params.get('rpcVideoTimeoutMs');
         if (vtParam != null && String(vtParam).trim() !== '') {
             const vt = parseInt(vtParam, 10);
             if (!isNaN(vt) && vt >= 3000) session.rpcVideoTimeoutMs = vt;
         } else {
-            session.rpcVideoTimeoutMs = 10000;
+            session.rpcVideoTimeoutMs = 60000;
         }
         const wtParam = params.get('rpcWsConnectTimeoutMs');
         if (wtParam != null && String(wtParam).trim() !== '') {

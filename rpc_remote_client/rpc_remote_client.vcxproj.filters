@@ -80,8 +80,11 @@
     <ClCompile Include="main.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="capture\capture_rgb_heuristics.cpp"><Filter>Source Files\capture</Filter></ClCompile>
     <ClCompile Include="encode\h264_avcc_utils.cpp"><Filter>Source Files\encode</Filter></ClCompile>
+    <ClCompile Include="session\process_lifecycle.cpp"><Filter>Source Files\session</Filter></ClCompile>
     <ClCompile Include="session\remote_process_stream_source.cpp"><Filter>Source Files\session</Filter></ClCompile>
     <ClCompile Include="session\remote_process_session.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="session\window_selection_diagnostics.cpp"><Filter>Source Files\session</Filter></ClCompile>
+    <ClCompile Include="session\window_selection_utils.cpp"><Filter>Source Files\session</Filter></ClCompile>
     <ClCompile Include="session\sample_output_state.cpp"><Filter>Source Files\session</Filter></ClCompile>
     <ClCompile Include="session\session_health_policy.cpp"><Filter>Source Files\session</Filter></ClCompile>
     <ClCompile Include="source\silence_opus_source.cpp"><Filter>Source Files\source</Filter></ClCompile>
@@ -107,8 +110,11 @@
     <ClInclude Include="input\input_controller.h"><Filter>Header Files\input</Filter></ClInclude>
     <ClInclude Include="capture\capture_rgb_heuristics.h"><Filter>Header Files\capture</Filter></ClInclude>
     <ClInclude Include="encode\h264_avcc_utils.h"><Filter>Header Files\encode</Filter></ClInclude>
+    <ClInclude Include="session\process_lifecycle.h"><Filter>Header Files\session</Filter></ClInclude>
     <ClInclude Include="session\remote_process_stream_source.h"><Filter>Header Files\session</Filter></ClInclude>
     <ClInclude Include="session\remote_process_session.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="session\window_selection_diagnostics.h"><Filter>Header Files\session</Filter></ClInclude>
+    <ClInclude Include="session\window_selection_utils.h"><Filter>Header Files\session</Filter></ClInclude>
     <ClInclude Include="session\session_health_policy.h"><Filter>Header Files\session</Filter></ClInclude>
     <ClInclude Include="session\sample_output_state.h"><Filter>Header Files\session</Filter></ClInclude>
     <ClInclude Include="common\rpc_time.h"><Filter>Header Files\common</Filter></ClInclude>

@@ -67,7 +67,7 @@
 配置文件：`rpc_remote_client/rpc_config.ini`
 
 常用项：
-- `RPC_CAPTURE_BACKEND=auto`：采集后端（auto/dxgi/gdi）
+- `RPC_CAPTURE_BACKEND=dxgi`：采集后端（dxgi/gdi）。默认 `dxgi`；若系统不支持 dxgi 则退回 gdi
 - `RPC_ACTIVE_FPS=30`：活跃帧率
 - `RPC_IDLE_FPS=5`：空闲帧率
 - `RPC_ENCODER_BACKEND=auto`：编码后端

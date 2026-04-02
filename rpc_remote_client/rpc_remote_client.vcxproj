@@ -36,8 +36,11 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="capture\capture_rgb_heuristics.cpp" />
     <ClCompile Include="encode\h264_avcc_utils.cpp" />
+    <ClCompile Include="session\process_lifecycle.cpp" />
     <ClCompile Include="session\remote_process_stream_source.cpp" />
     <ClCompile Include="session\remote_process_session.cpp" />
+    <ClCompile Include="session\window_selection_diagnostics.cpp" />
+    <ClCompile Include="session\window_selection_utils.cpp" />
     <ClCompile Include="session\sample_output_state.cpp" />
     <ClCompile Include="session\session_health_policy.cpp" />
     <ClCompile Include="source\silence_opus_source.cpp" />
@@ -63,8 +66,11 @@
     <ClInclude Include="input\input_controller.h" />
     <ClInclude Include="capture\capture_rgb_heuristics.h" />
     <ClInclude Include="encode\h264_avcc_utils.h" />
+    <ClInclude Include="session\process_lifecycle.h" />
     <ClInclude Include="session\remote_process_stream_source.h" />
     <ClInclude Include="session\remote_process_session.h" />
+    <ClInclude Include="session\window_selection_diagnostics.h" />
+    <ClInclude Include="session\window_selection_utils.h" />
     <ClInclude Include="session\session_health_policy.h" />
     <ClInclude Include="session\sample_output_state.h" />
     <ClInclude Include="common\runtime_config.h" />

@@ -1,4 +1,5 @@
 #include "transport/webrtc_socket.h"
+#include <algorithm>
 #include <thread>
 #include <chrono>
 #include "input/input_controller.h"
@@ -15,6 +16,11 @@ WebRTCSocket::WebRTCSocket()
     , m_thread_queue("WebRTCSocket")
 {
 	rtc::InitLogger(rtc::LogLevel::Info);
+    m_stun_server = runtime_config::get_string("RPC_WEBRTC_STUN_SERVER", "stun.l.google.com:19302");
+    m_signaling_local_id = runtime_config::get_string("RPC_SIGNALING_LOCAL_ID", "server");
+    m_frame_mark_interval = static_cast<uint64_t>((std::max)(1, runtime_config::get_int("RPC_FRAME_MARK_INTERVAL", 10)));
+    m_capture_health_interval = static_cast<uint64_t>((std::max)(1, runtime_config::get_int("RPC_CAPTURE_HEALTH_INTERVAL", 30)));
+
     FileTransferService::Options options;
     options.data_root = runtime_config::get_string("RPC_DATA_ROOT", "D:\\rpc_data");
     options.default_chunk_size = static_cast<std::size_t>(runtime_config::get_int("RPC_FILE_CHUNK_SIZE", 512 * 1024));
@@ -34,12 +40,8 @@ void WebRTCSocket::_init_signaling()
     // 可选 STUN：腾讯 stun.l.tencent.com:3478
     // 可选 STUN：阿里 stun.aliyun.com:3478
     // 可选 STUN：Google stun.l.google.com:19302
-    std::string stun_server = "stun.l.google.com:19302";
-
-    m_config.iceServers.emplace_back(stun_server);
+    m_config.iceServers.emplace_back(m_stun_server);
     m_config.disableAutoNegotiation = true;
-
-    std::string localId = "server";
 
     m_ws = std::make_shared<rtc::WebSocket>();
 
@@ -71,7 +73,7 @@ void WebRTCSocket::_init_signaling()
                         } 
                     });
 
-    m_signaling_url = "ws://" + m_signaling_ip + ":" + std::to_string(m_signaling_port) + "/" + localId;
+    m_signaling_url = "ws://" + m_signaling_ip + ":" + std::to_string(m_signaling_port) + "/" + m_signaling_local_id;
     std::cout << "[signaling] opening websocket url=" << m_signaling_url << std::endl;
     try {
         m_ws->open(m_signaling_url);
@@ -119,17 +121,15 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
             }
         }
 
-        // 前端可选传入进程路径
-        if (message.contains("exePath")) {
+        // 进程路径由前端请求提供；未提供则不启动远程进程、不发送视频。
+        if (media_enabled) {
             const std::string exePath = message.value("exePath", "");
-            if (!exePath.empty()) {
-                std::scoped_lock lk(m_stream_mtx);
-                m_exe_path = exePath;
-                // 重置流，确保下次启动使用新进程
-                if (m_stream) {
-                    m_stream->stop();
-                    m_stream.reset();
-                }
+            std::scoped_lock lk(m_stream_mtx);
+            m_exe_path = exePath;
+            // 重置流，确保下次启动严格使用本次请求路径（或保持为空）。
+            if (m_stream) {
+                m_stream->stop();
+                m_stream.reset();
             }
         }
 
@@ -222,7 +222,15 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
 
     std::cout << "[stream] _get_or_create_stream begin" << std::endl;
 
-    const std::string exePath = m_exe_path.empty() ? "C:\\Windows\\System32\\notepad.exe" : m_exe_path;
+    std::string exePath;
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        exePath = m_exe_path;
+    }
+    if (exePath.empty()) {
+        std::cout << "[stream] exePath missing from request, skip remote process launch" << std::endl;
+        return nullptr;
+    }
     std::cout << "[stream] launching exePath=" << exePath << std::endl;
 
     auto video = std::make_shared<RemoteProcessStreamSource>();
@@ -239,8 +247,34 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
     stream->on_sample([ws = make_weak_ptr(stream), this](Stream::StreamSourceType type, uint64_t sampleTime, rtc::binary sample) {
         static auto lastLog = std::chrono::steady_clock::now();
         static uint64_t videoFrameIndex = 0;
+        static int lastVideoW = 0;
+        static int lastVideoH = 0;
         if (type == Stream::StreamSourceType::Video) {
             videoFrameIndex++;
+            if (auto s = ws.lock()) {
+                if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(s->m_c_video)) {
+                    const int curW = pm->get_capture_width();
+                    const int curH = pm->get_capture_height();
+                    if (curW > 0 && curH > 0 && (curW != lastVideoW || curH != lastVideoH)) {
+                        lastVideoW = curW;
+                        lastVideoH = curH;
+                        const nlohmann::json vres = {
+                            {"type", "videoResolution"},
+                            {"width", curW},
+                            {"height", curH},
+                        };
+                        const std::string vresPayload = vres.dump();
+                        for (const auto& id_client : m_clients) {
+                            auto ch = id_client.second->get_data_channel();
+                            if (!ch) continue;
+                            try {
+                                ch->send(vresPayload);
+                            } catch (...) {
+                            }
+                        }
+                    }
+                }
+            }
             auto now = std::chrono::steady_clock::now();
             if (now - lastLog > std::chrono::seconds(1)) {
                 lastLog = now;
@@ -255,8 +289,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
             }
 
             // 降低 frameMark 发送频率，减少 DataChannel/JSON 开销。
-            constexpr uint64_t kFrameMarkInterval = 10;
-            if ((videoFrameIndex % kFrameMarkInterval) == 0) {
+            if ((videoFrameIndex % m_frame_mark_interval) == 0) {
                 uint64_t srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count());
                 uint32_t cap_ms = 0;
@@ -266,11 +299,13 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                 int topBlackStripStreak = 0;
                 int dxgiInstabilityScore = 0;
                 uint64_t forceSwUntilMs = 0;
+                uint64_t lastFrameUnixMs = 0;
                 if (auto s = ws.lock()) {
                     if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(s->m_c_video)) {
                         cap_ms = pm->get_last_capture_ms();
                         enc_ms = pm->get_last_encode_ms();
                         const uint64_t fu = pm->get_last_frame_unix_ms();
+                        lastFrameUnixMs = fu;
                         if (fu != 0) srv_wall = fu;
                         capHw = pm->get_last_capture_used_hw();
                         dxgiDisabled = pm->is_dxgi_disabled_for_session();
@@ -278,6 +313,15 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
                         dxgiInstabilityScore = pm->get_dxgi_instability_score();
                         forceSwUntilMs = pm->get_force_software_capture_until_unix_ms();
                     }
+                }
+                // 诊断语义修正：
+                // 当发送端一段时间没有“新编码帧”时，last_frame_unix_ms 会停在旧值。
+                // 若继续拿旧值做 srvMs，前端会把差值误判成不断增长的网络延迟。
+                // 因此当时间戳明显过旧时，退回当前墙钟时间。
+                const uint64_t now_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                if (lastFrameUnixMs != 0 && now_wall > lastFrameUnixMs && (now_wall - lastFrameUnixMs) > 1000) {
+                    srv_wall = now_wall;
                 }
                 const nlohmann::json mark = {
                     {"type", "frameMark"},
@@ -298,8 +342,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
 
                 // 发送采集健康遥测，供前端可视化与调试。
                 // 保持低频，避免额外信令开销。
-                constexpr uint64_t kCaptureHealthInterval = 30;
-                if ((videoFrameIndex % kCaptureHealthInterval) == 0) {
+                if ((videoFrameIndex % m_capture_health_interval) == 0) {
                     const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
                     const bool forceSwActive = (forceSwUntilMs != 0 && nowMs < forceSwUntilMs);

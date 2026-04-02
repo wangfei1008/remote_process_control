@@ -1,30 +1,73 @@
 #include "session/remote_process_session.h"
+#include "session/process_lifecycle.h"
+#include "session/window_selection_diagnostics.h"
+#include "session/window_selection_utils.h"
 
-#include <algorithm>
+#include <functional>
 #include <iostream>
 
-std::string RemoteProcessSession::basename_from_path(const std::string& path)
+namespace {
+
+struct BestWindow {
+    HWND hwnd = nullptr;
+    int score = -1000000;
+    int area = 0;
+};
+
+// 通用窗口择优器：
+// 1) 统一遍历窗口与基础评分；
+// 2) 由调用方提供过滤条件与附加分，避免多处复制“枚举 + 评分 + 取最大”模板代码。
+static HWND find_best_window(
+    DWORD expected_pid,
+    bool require_pid_match,
+    const std::function<bool(HWND, DWORD)>& accept,
+    const std::function<int(HWND, DWORD)>& bonus_score)
 {
-    const auto pos = path.find_last_of("\\/");
-    return (pos == std::string::npos) ? path : path.substr(pos + 1);
+    struct EnumCtx {
+        DWORD expected_pid = 0;
+        bool require_pid_match = false;
+        const std::function<bool(HWND, DWORD)>* accept = nullptr;
+        const std::function<int(HWND, DWORD)>* bonus_score = nullptr;
+        BestWindow* best = nullptr;
+    } ctx{expected_pid, require_pid_match, &accept, &bonus_score, nullptr};
+
+    BestWindow best;
+    ctx.best = &best;
+
+    EnumWindows([](HWND hwnd, LPARAM l_param) -> BOOL {
+        auto* c = reinterpret_cast<EnumCtx*>(l_param);
+
+        RECT rect{};
+        if (!GetWindowRect(hwnd, &rect)) return TRUE;
+        const int width = rect.right - rect.left;
+        const int height = rect.bottom - rect.top;
+        if (width <= 0 || height <= 0) return TRUE;
+
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (!pid) return TRUE;
+
+        // std::function 可能为空：指针非空不代表可调用，需先判断 *func 是否有目标。
+        if (c->accept && *c->accept && !(*(c->accept))(hwnd, pid)) return TRUE;
+
+        int score = window_selection_utils::score_window_for_capture(
+            hwnd, c->expected_pid, c->require_pid_match);
+        if (score <= -1000000) return TRUE;
+        if (c->bonus_score && *c->bonus_score) score += (*(c->bonus_score))(hwnd, pid);
+
+        const int area = width * height;
+        if (score > c->best->score || (score == c->best->score && area > c->best->area)) {
+            c->best->score = score;
+            c->best->area = area;
+            c->best->hwnd = hwnd;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+
+    return best.hwnd;
 }
 
-std::string RemoteProcessSession::get_process_basename(DWORD pid)
-{
-    HANDLE process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process_handle) return {};
-
-    char path_buffer[MAX_PATH] = {0};
-    DWORD path_size = MAX_PATH;
-    std::string process_name;
-    if (QueryFullProcessImageNameA(process_handle, 0, path_buffer, &path_size)) {
-        process_name = basename_from_path(std::string(path_buffer, path_buffer + path_size));
-        std::transform(process_name.begin(), process_name.end(), process_name.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    }
-    CloseHandle(process_handle);
-    return process_name;
-}
+} // namespace
 
 bool RemoteProcessSession::launch_process(const std::string& exe_path,
                                           PROCESS_INFORMATION& out_process_info,
@@ -33,53 +76,19 @@ bool RemoteProcessSession::launch_process(const std::string& exe_path,
                                           HWND& out_main_window,
                                           std::string& out_target_exe_base_name)
 {
-    STARTUPINFOA startup_info{};
-    startup_info.cb = sizeof(startup_info);
-
-    out_target_exe_base_name = basename_from_path(exe_path);
-    std::transform(out_target_exe_base_name.begin(), out_target_exe_base_name.end(), out_target_exe_base_name.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    if (!CreateProcessA(exe_path.c_str(), NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startup_info, &out_process_info)) {
-        std::cout << "[proc] CreateProcess failed, exe=" << exe_path
-                  << " error=" << GetLastError() << std::endl;
+    if (!process_lifecycle::launch_process(
+            exe_path, out_process_info, out_launch_pid, out_capture_pid, out_target_exe_base_name)) {
         return false;
     }
 
-    std::cout << "[proc] CreateProcess ok, pid=" << out_process_info.dwProcessId
-              << " exe=" << exe_path << std::endl;
-
-    out_launch_pid = out_process_info.dwProcessId;
-    out_capture_pid = out_launch_pid;
-
     // 不要因等待窗口而阻塞流创建。
     out_main_window = find_main_window(out_process_info.dwProcessId);
-    if (!out_main_window) {
-        auto windows = find_all_windows(out_process_info.dwProcessId);
-        if (!windows.empty()) out_main_window = windows.front();
-    }
     return true;
 }
 
 void RemoteProcessSession::terminate_processes(PROCESS_INFORMATION& process_info, DWORD capture_pid, DWORD launch_pid)
 {
-    if (process_info.hProcess) {
-        TerminateProcess(process_info.hProcess, 0);
-        CloseHandle(process_info.hProcess);
-        process_info.hProcess = nullptr;
-    }
-    if (process_info.hThread) {
-        CloseHandle(process_info.hThread);
-        process_info.hThread = nullptr;
-    }
-
-    if (capture_pid != 0 && capture_pid != launch_pid) {
-        HANDLE process_handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, capture_pid);
-        if (process_handle) {
-            TerminateProcess(process_handle, 0);
-            CloseHandle(process_handle);
-        }
-    }
+    process_lifecycle::terminate_processes(process_info, capture_pid, launch_pid);
 }
 
 std::vector<HWND> RemoteProcessSession::find_all_windows(DWORD pid) const
@@ -107,69 +116,77 @@ std::vector<HWND> RemoteProcessSession::find_all_windows(DWORD pid) const
 
 HWND RemoteProcessSession::find_main_window(DWORD pid) const
 {
-    struct Handle_data {
-        DWORD pid = 0;
-        HWND hwnd = nullptr;
-    } handle_data{pid, nullptr};
-
-    EnumWindows([](HWND hwnd, LPARAM l_param) -> BOOL {
-        auto* data = reinterpret_cast<Handle_data*>(l_param);
-        DWORD window_pid = 0;
-        GetWindowThreadProcessId(hwnd, &window_pid);
-        if (window_pid == data->pid && GetWindow(hwnd, GW_OWNER) == NULL && IsWindowVisible(hwnd)) {
-            data->hwnd = hwnd;
-            return FALSE;
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&handle_data));
-
-    return handle_data.hwnd;
+    return find_best_window(
+        pid,
+        true,
+        std::function<bool(HWND, DWORD)>(),
+        std::function<int(HWND, DWORD)>());
 }
 
 HWND RemoteProcessSession::find_window_by_exe_basename(const std::string& exe_base_name) const
 {
     if (exe_base_name.empty()) return nullptr;
+    const std::string target_name = window_selection_utils::to_lower_ascii(exe_base_name);
+    return find_best_window(
+        0,
+        false,
+        [&target_name](HWND, DWORD pid) {
+            const std::string base_name = process_lifecycle::get_process_basename(pid);
+            return !base_name.empty() && base_name == target_name;
+        },
+        std::function<int(HWND, DWORD)>());
+}
 
-    std::string target_name = exe_base_name;
-    std::transform(target_name.begin(), target_name.end(), target_name.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+HWND RemoteProcessSession::find_window_by_exe_hint(const std::string& exe_base_name) const
+{
+    if (exe_base_name.empty()) return nullptr;
+    const std::string stem = window_selection_utils::exe_stem_lower(exe_base_name);
+    if (stem.empty()) return nullptr;
+    return find_best_window(
+        0,
+        false,
+        [&stem](HWND hwnd, DWORD) {
+            if (!IsWindowVisible(hwnd)) return false;
+            if (GetWindow(hwnd, GW_OWNER) != NULL) return false;
+            const std::string title = window_selection_utils::get_window_text_lower(hwnd);
+            const std::string cls = window_selection_utils::get_window_class_lower(hwnd);
+            return title.find(stem) != std::string::npos || cls.find(stem) != std::string::npos;
+        },
+        [&stem](HWND hwnd, DWORD) {
+            // hint 路径下，标题/类名命中 exe stem 作为附加分，而不是替代基础评分。
+            int bonus = 0;
+            const std::string title = window_selection_utils::get_window_text_lower(hwnd);
+            const std::string cls = window_selection_utils::get_window_class_lower(hwnd);
+            if (title.find(stem) != std::string::npos) bonus += 12;
+            if (cls.find(stem) != std::string::npos) bonus += 6;
+            return bonus;
+        });
+}
 
-    struct Best_window {
-        HWND hwnd = nullptr;
-        int area = 0;
-    } best_window;
+bool RemoteProcessSession::is_window_viable_for_capture(HWND hwnd) const
+{
+    if (!hwnd || !IsWindow(hwnd)) return false;
+    const int score = window_selection_utils::score_window_for_capture(hwnd, 0, false);
+    return score > 0;
+}
 
-    struct Enum_ctx {
-        const char* target = nullptr;
-        Best_window* best = nullptr;
-    } enum_ctx{target_name.c_str(), &best_window};
+void RemoteProcessSession::log_window_candidates_for_rebind(DWORD capture_pid, const std::string& target_exe_base_name) const
+{
+    // 该函数只负责“诊断流程编排”；候选采集/排序/输出细节下沉到 diagnostics 模块。
+    const std::string target_name = window_selection_utils::to_lower_ascii(target_exe_base_name);
+    const std::string stem = window_selection_utils::exe_stem_lower(target_exe_base_name);
+    const HWND by_pid = find_main_window(capture_pid);
+    const HWND by_exe = target_name.empty() ? nullptr : find_window_by_exe_basename(target_name);
+    const HWND by_hint = target_name.empty() ? nullptr : find_window_by_exe_hint(target_name);
 
-    EnumWindows([](HWND hwnd, LPARAM l_param) -> BOOL {
-        auto* ctx = reinterpret_cast<Enum_ctx*>(l_param);
-        if (!IsWindowVisible(hwnd)) return TRUE;
-        if (GetWindow(hwnd, GW_OWNER) != NULL) return TRUE;
-
-        RECT rect{};
-        if (!GetWindowRect(hwnd, &rect)) return TRUE;
-        const int width = rect.right - rect.left;
-        const int height = rect.bottom - rect.top;
-        if (width <= 0 || height <= 0) return TRUE;
-
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
-        if (!pid) return TRUE;
-
-        std::string base_name = RemoteProcessSession::get_process_basename(pid);
-        if (base_name.empty() || base_name != ctx->target) return TRUE;
-
-        const int area = width * height;
-        if (area > ctx->best->area) {
-            ctx->best->area = area;
-            ctx->best->hwnd = hwnd;
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&enum_ctx));
-
-    return best_window.hwnd;
+    std::vector<window_selection_diagnostics::WindowCandidateInfo> candidates;
+    window_selection_diagnostics::collect_rebind_candidates(
+        capture_pid,
+        target_name,
+        stem,
+        [](DWORD pid) { return process_lifecycle::get_process_basename(pid); },
+        candidates);
+    window_selection_diagnostics::sort_candidates_by_rank(candidates);
+    window_selection_diagnostics::log_rebind_summary(capture_pid, target_name, by_pid, by_exe, by_hint, candidates);
 }
 

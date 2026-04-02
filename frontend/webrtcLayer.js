@@ -509,12 +509,26 @@
                 const now = Date.now();
                 if (v.__rpc_last_resize_apply_ms != null && (now - v.__rpc_last_resize_apply_ms) < 200) return;
                 v.__rpc_last_resize_apply_ms = now;
+                i.applyVideoDisplaySize && i.applyVideoDisplaySize(v);
                 updateVideoSizeInfo(doc);
             });
             if (typeof session.activeVideo.requestVideoFrameCallback === 'function') {
                 const vv = session.activeVideo;
+                vv.__rpc_last_frame_w = vv.videoWidth || 0;
+                vv.__rpc_last_frame_h = vv.videoHeight || 0;
                 const onVideoFrame = function () {
                     if (!session.activeVideo || session.activeVideo !== vv) return;
+                    const wNow = vv.videoWidth || 0;
+                    const hNow = vv.videoHeight || 0;
+                    if (wNow > 0 && hNow > 0 &&
+                        (wNow !== vv.__rpc_last_frame_w || hNow !== vv.__rpc_last_frame_h)) {
+                        vv.__rpc_last_frame_w = wNow;
+                        vv.__rpc_last_frame_h = hNow;
+                        session.rpcStreamW = wNow;
+                        session.rpcStreamH = hNow;
+                        i.applyVideoDisplaySize && i.applyVideoDisplaySize(vv);
+                        updateVideoSizeInfo(doc);
+                    }
                     i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
                     vv.requestVideoFrameCallback(onVideoFrame);
                 };
@@ -667,6 +681,44 @@
                     const str = ev.data;
                     try {
                         const j0 = JSON.parse(str);
+                        if (j0 && j0.type === 'videoResolution') {
+                            const w = Number(j0.width || 0);
+                            const h = Number(j0.height || 0);
+                            if (w > 0 && h > 0) {
+                                const nowMs = Date.now();
+                                const prevW = Number(session.__rpc_last_forced_w || 0);
+                                const prevH = Number(session.__rpc_last_forced_h || 0);
+                                const prevTs = Number(session.__rpc_last_forced_ts || 0);
+                                const prevArea = (prevW > 0 && prevH > 0) ? (prevW * prevH) : 0;
+                                const curArea = w * h;
+                                const suspiciousTinyDrop = prevArea > 0 &&
+                                    curArea < (prevArea * 0.2) &&
+                                    (Math.min(w, h) < 120);
+                                if (suspiciousTinyDrop && (nowMs - prevTs) < 8000) {
+                                    console.warn('[rpc-res][dc] ignore suspicious tiny downgrade '
+                                        + prevW + 'x' + prevH + ' -> ' + w + 'x' + h);
+                                    return;
+                                }
+                                console.info('[rpc-res][dc] videoResolution from backend=' + w + 'x' + h);
+                                session.rpcStreamW = w;
+                                session.rpcStreamH = h;
+                                session.__rpc_last_forced_w = w;
+                                session.__rpc_last_forced_h = h;
+                                session.__rpc_last_forced_ts = nowMs;
+                                const vv = getMainVideo(doc);
+                                if (vv) {
+                                    // 后端分辨率作为显式信号，避免浏览器 resize 事件丢失时 UI 不更新。
+                                    vv.__rpc_forced_w = w;
+                                    vv.__rpc_forced_h = h;
+                                    i.applyVideoDisplaySize && i.applyVideoDisplaySize(vv);
+                                    console.info('[rpc-res][dc] video element now='
+                                        + Number(vv.videoWidth || 0) + 'x' + Number(vv.videoHeight || 0)
+                                        + ' forced=' + Number(vv.__rpc_forced_w || 0) + 'x' + Number(vv.__rpc_forced_h || 0));
+                                }
+                                updateVideoSizeInfo(doc);
+                            }
+                            return;
+                        }
                         if (j0 && j0.type === 'remoteProcessExited') {
                             /* 服务端可能在主窗 HWND 瞬时失效时误发退出；轨仍 live 时忽略，改由 track ended 等关窗 */
                             if (typeof i.rpcShellCloseAllowed === 'function' && i.rpcShellCloseAllowed(session) && session.pc) {

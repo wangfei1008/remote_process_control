@@ -655,6 +655,22 @@
                 const vw = Number(videoW) || 0;
                 const vh = Number(videoH) || 0;
                 if (!vw || !vh) return;
+                const now = Date.now();
+                const prevW = Number(winEl.__rpc_last_fit_w || 0);
+                const prevH = Number(winEl.__rpc_last_fit_h || 0);
+                const prevTs = Number(winEl.__rpc_last_fit_ts || 0);
+                const prevArea = (prevW > 0 && prevH > 0) ? (prevW * prevH) : 0;
+                const curArea = vw * vh;
+                const inStartupGuard = prevTs > 0 && (now - prevTs) < 8000;
+                const suspiciousTinyDrop = prevArea > 0 &&
+                    curArea < (prevArea * 0.2) &&
+                    (Math.min(vw, vh) < 120);
+                if (inStartupGuard && suspiciousTinyDrop) {
+                    console.warn('[rpc-res][desktop] ignore suspicious tiny downgrade '
+                        + prevW + 'x' + prevH + ' -> ' + vw + 'x' + vh
+                        + ' (startup guard active)');
+                    return;
+                }
                 const stageH = Math.max(360, (window.innerHeight || 720) - 48);
                 const maxW = Math.max(640, Math.floor((window.innerWidth || 1280) * 0.9));
                 const maxH = Math.max(360, Math.floor(stageH * 0.9));
@@ -669,6 +685,12 @@
                 const top = Math.max(12, Math.floor((stageH - targetH) / 2));
                 winEl.style.left = String(left) + 'px';
                 winEl.style.top = String(top) + 'px';
+                winEl.__rpc_last_fit_w = vw;
+                winEl.__rpc_last_fit_h = vh;
+                winEl.__rpc_last_fit_ts = now;
+                console.info('[rpc-res][desktop] fit window by child resolution=' + vw + 'x' + vh
+                    + ' -> window=' + String(Math.max(320, targetW)) + 'x' + String(Math.max(180, targetH))
+                    + ' at ' + left + ',' + top);
             }
 
             function onChildFrameMessage(event) {
@@ -676,6 +698,8 @@
                 const data = event.data;
                 if (!data || !data.type) return;
                 if (data.type === 'rpc_video_resolution') {
+                    console.info('[rpc-res][desktop] got child postMessage resolution='
+                        + Number(data.width || 0) + 'x' + Number(data.height || 0));
                     fitWindowToVideoResolution(data.width, data.height);
                     return;
                 }

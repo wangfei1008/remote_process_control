@@ -54,6 +54,7 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
                 outcome.cap_min_left, outcome.cap_min_top, true);
             outcome.used_hw_capture = false;
             if (outcome.frame.empty()) {
+                // 不再自动回退到 all-windows，避免误采集无关窗口（如启动器/工具窗）。
                 outcome.ok = false;
                 outcome.need_hold_on_empty_fallback = true;
             }

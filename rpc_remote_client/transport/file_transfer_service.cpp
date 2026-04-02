@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <vector>
+#include "common/runtime_config.h"
 
 namespace {
 
@@ -126,7 +127,8 @@ static std::string utf8_from_path(const std::filesystem::path& p) {
 FileTransferService::FileTransferService(Options options)
     : m_options(std::move(options)) {
     if (m_options.data_root.empty()) {
-        m_options.data_root = std::filesystem::path("D:\\rpc_data");
+        m_options.data_root = std::filesystem::path(
+            runtime_config::get_string("RPC_DATA_ROOT", "D:\\rpc_data"));
     }
     std::error_code ec;
     std::filesystem::create_directories(m_options.data_root, ec);

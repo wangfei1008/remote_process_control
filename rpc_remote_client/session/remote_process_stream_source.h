@@ -99,6 +99,7 @@ private:
     bool m_allow_pid_rebind_by_exename = true;
     uint64_t m_pid_rebind_deadline_unix_ms = 0;
     uint64_t m_window_missing_since_unix_ms = 0;
+    uint32_t m_pid_rebind_startup_window_ms = 120000;
     uint32_t m_window_missing_exit_grace_ms = 5000;
     bool m_running = false;
     GdiCapture m_gdiCapture; // GDI 窗口图像采集后端。
@@ -113,6 +114,9 @@ private:
     uint32_t m_last_capture_ms = 0;
     uint32_t m_last_encode_ms = 0;
     uint64_t m_last_frame_unix_ms = 0;
+    // 首帧前连续空帧计数；达到阈值时强制重选窗口，避免卡在不可采集句柄。
+    uint32_t m_pre_video_empty_frame_streak = 0;
+    uint32_t m_pre_video_reselect_empty_threshold = 30;
 
     std::function<void()> m_on_remote_exit;
     bool m_had_successful_video = false;

@@ -118,6 +118,8 @@ bool frame_has_top_black_strip_rgb24(const std::vector<uint8_t>& rgb, int width,
 
 bool is_suspicious_capture_frame(const std::vector<uint8_t>& rgb, int width, int height)
 {
+    // 统一可疑帧入口：这里保持“快判断”，不做昂贵图像算法。
+    // 真正高成本兜底（如二次重采）由上层按需触发。
     if (rgb.empty() || width <= 0 || height <= 0) return true;
     if (frame_mostly_black_rgb24(rgb, width, height)) return true;
     if (frame_low_variance_rgb24(rgb, width, height)) return true;

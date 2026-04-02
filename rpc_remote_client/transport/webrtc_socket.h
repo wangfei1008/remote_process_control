@@ -3,6 +3,7 @@
 #include <rtc/rtc.hpp>
 #include <memory>
 #include <string>
+#include <cstdint>
 #include "nlohmann/json.hpp"
 #include "transport/dispatch_queue.hpp"
 #include "transport/client_peer_connection.h"
@@ -35,6 +36,10 @@ private:
     std::string m_signaling_ip;
     std::string m_signaling_url;
 	int m_signaling_port;
+    std::string m_stun_server;
+    std::string m_signaling_local_id;
+    uint64_t m_frame_mark_interval = 10;
+    uint64_t m_capture_health_interval = 30;
 	DispatchQueue m_thread_queue; // WebRTC 操作使用单线程队列
 
 	std::unordered_map<std::string, std::shared_ptr<ClientPeerConnection>> m_clients;

@@ -64,14 +64,51 @@
         return doc.getElementById('video-stage');
     }
 
+    function resolveEffectiveVideoResolution(video, fallbackW, fallbackH) {
+        if (!video) return { w: 0, h: 0 };
+        const vw = Number(video.videoWidth || 0);
+        const vh = Number(video.videoHeight || 0);
+        const fw = Number(video.__rpc_forced_w || 0);
+        const fh = Number(video.__rpc_forced_h || 0);
+        const sw = Number(fallbackW || 0);
+        const sh = Number(fallbackH || 0);
+        const vArea = (vw > 0 && vh > 0) ? (vw * vh) : 0;
+        const fArea = (fw > 0 && fh > 0) ? (fw * fh) : 0;
+
+        // 后端通过 DataChannel 主动上报分辨率变化时，优先使用该值，
+        // 避免浏览器 videoWidth/videoHeight 仍停留旧值导致 UI 尺寸不刷新。
+        // 但如果浏览器已经解码出更大的稳定分辨率，且 forced 显著更小（常见于启动条/工具窗瞬时误报），
+        // 则优先使用 videoWidth/videoHeight，避免 UI 被瞬时降级回小分辨率。
+        if (vArea > 0 && fArea > 0 && vArea >= (fArea * 2)) {
+            return { w: vw, h: vh };
+        }
+        if (fw > 0 && fh > 0) return { w: fw, h: fh };
+        if (vw > 0 && vh > 0) return { w: vw, h: vh };
+        if (sw > 0 && sh > 0) return { w: sw, h: sh };
+        return { w: 0, h: 0 };
+    }
+
+    function logResolutionDecision(video, tag, payload) {
+        if (!video) return;
+        const now = Date.now();
+        const key = tag + '|' + String(payload && payload.w || 0) + 'x' + String(payload && payload.h || 0)
+            + '|' + String(payload && payload.fw || 0) + 'x' + String(payload && payload.fh || 0)
+            + '|' + String(payload && payload.vw || 0) + 'x' + String(payload && payload.vh || 0);
+        if (video.__rpc_last_res_log_key === key && (now - (video.__rpc_last_res_log_ms || 0)) < 1200) return;
+        video.__rpc_last_res_log_key = key;
+        video.__rpc_last_res_log_ms = now;
+        try {
+            console.info('[rpc-res][' + tag + '] effective=' + (payload.w || 0) + 'x' + (payload.h || 0)
+                + ' forced=' + (payload.fw || 0) + 'x' + (payload.fh || 0)
+                + ' video=' + (payload.vw || 0) + 'x' + (payload.vh || 0));
+        } catch (_) {}
+    }
+
     function pointerToVideoPixels(video, clientX, clientY, streamW, streamH) {
         const rect = video.getBoundingClientRect();
-        let iw = video.videoWidth;
-        let ih = video.videoHeight;
-        if (!iw || !ih) {
-            iw = streamW;
-            ih = streamH;
-        }
+        const eff = resolveEffectiveVideoResolution(video, streamW, streamH);
+        let iw = eff.w;
+        let ih = eff.h;
         if (!iw || !ih) return null;
         const rw = rect.width;
         const rh = rect.height;
@@ -99,9 +136,15 @@
 
     function applyVideoDisplaySize(video) {
         if (!video) return;
-        const iw = video.videoWidth;
-        const ih = video.videoHeight;
+        const eff = resolveEffectiveVideoResolution(video, 0, 0);
+        const iw = eff.w;
+        const ih = eff.h;
         if (!iw || !ih) return;
+        logResolutionDecision(video, 'apply', {
+            w: iw, h: ih,
+            fw: Number(video.__rpc_forced_w || 0), fh: Number(video.__rpc_forced_h || 0),
+            vw: Number(video.videoWidth || 0), vh: Number(video.videoHeight || 0),
+        });
         const doc = video.ownerDocument;
         const compact = doc && doc.documentElement.classList.contains('rpc-window-mode');
         /* 应用/全屏模式 HUD 已藏，不必留过大边距，否则易被误认为「画面不全」 */
@@ -184,17 +227,33 @@
     function updateVideoSizeInfo(doc) {
         const v = getMainVideo(doc);
         const el = doc.getElementById('rpc-video-size');
-        if (el && v) el.textContent = v.videoWidth + ' x ' + v.videoHeight;
+        if (el && v) {
+            const eff = resolveEffectiveVideoResolution(v, 0, 0);
+            const w = eff.w;
+            const h = eff.h;
+            el.textContent = w + ' x ' + h;
+            logResolutionDecision(v, 'hud', {
+                w: w, h: h,
+                fw: Number(v.__rpc_forced_w || 0), fh: Number(v.__rpc_forced_h || 0),
+                vw: Number(v.videoWidth || 0), vh: Number(v.videoHeight || 0),
+            });
+        }
         notifyParentVideoResolution(doc, v);
     }
 
     function notifyParentVideoResolution(doc, videoEl) {
         if (!doc || !videoEl) return;
-        const w = videoEl.videoWidth || 0;
-        const h = videoEl.videoHeight || 0;
+        const eff = resolveEffectiveVideoResolution(videoEl, 0, 0);
+        const w = eff.w;
+        const h = eff.h;
         if (!w || !h) return;
         try {
             if (window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
+                logResolutionDecision(videoEl, 'postMessage', {
+                    w: w, h: h,
+                    fw: Number(videoEl.__rpc_forced_w || 0), fh: Number(videoEl.__rpc_forced_h || 0),
+                    vw: Number(videoEl.videoWidth || 0), vh: Number(videoEl.videoHeight || 0),
+                });
                 window.parent.postMessage({
                     type: 'rpc_video_resolution',
                     width: w,
