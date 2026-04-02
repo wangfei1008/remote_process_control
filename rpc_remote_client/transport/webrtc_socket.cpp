@@ -228,7 +228,7 @@ std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
     auto video = std::make_shared<RemoteProcessStreamSource>();
     video->set_on_remote_exit([this]() {
         m_thread_queue.dispatch([this]() {
-            _stop_and_reset_stream();
+            _stop_stream_keep_clients();
         });
     });
     video->launch_process(exePath);
@@ -403,6 +403,23 @@ void WebRTCSocket::_stop_and_reset_stream()
     // 确保所有客户端 PeerConnection 都被关闭并清理。
     _close_all_clients();
 
+    InputController::instance()->clear_mouse_target();
+
+    std::shared_ptr<Stream> local;
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        local = m_stream;
+        m_stream.reset();
+    }
+    if (local) {
+        try { local->stop(); } catch (...) {}
+    }
+}
+
+void WebRTCSocket::_stop_stream_keep_clients()
+{
+    // 目标进程结束时，只通知前端退出视频页；保持 signaling 与客户端连接不被强拆。
+    _broadcast_remote_process_exited();
     InputController::instance()->clear_mouse_target();
 
     std::shared_ptr<Stream> local;

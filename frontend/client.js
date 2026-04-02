@@ -43,13 +43,15 @@
             rpcAutostart: false,
             rpcHadVideo: false,
             rpcAutoClosed: false,
-            /** 应用模式：多久内未收到有效视频则关窗（ms），URL ?rpcVideoTimeoutMs= */
-            rpcVideoTimeoutMs: 90000,
+            /** 视频页：10 秒无视频则主动退出（可用 URL ?rpcVideoTimeoutMs= 覆盖） */
+            rpcVideoTimeoutMs: 10000,
             /** 应用模式：WebSocket 多久未连上则关窗（ms），URL ?rpcWsConnectTimeoutMs= */
             rpcWsConnectTimeoutMs: 45000,
             rpcNoVideoTimer: null,
             rpcWsConnectTimer: null,
             rpcPcDisconnectTimer: null,
+            rpcVideoPageOpenedAt: 0,
+            rpcVideoLastAliveAt: 0,
             /** Electron 紧凑启动：先只显示记事本磁贴，双击后再进视频；与 rpcWindow 可并存 */
             electronCompactLauncher: false,
             electronVideoOpen: false,
@@ -66,6 +68,7 @@
         const id = session[key];
         if (id != null) {
             clearTimeout(id);
+            clearInterval(id);
             session[key] = null;
         }
     }
@@ -86,6 +89,15 @@
         clearSessionTimer(session, 'rpcWsConnectTimer');
         clearSessionTimer(session, 'rpcPcDisconnectTimer');
         console.warn('[rpc-window] 自动关闭窗口: ' + (reason || ''));
+        try {
+            if (window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
+                window.parent.postMessage({
+                    type: 'rpc_request_close',
+                    reason: reason || '',
+                }, '*');
+                return;
+            }
+        } catch (_) {}
         if (window.rpcShell && typeof window.rpcShell.close === 'function') {
             try {
                 window.rpcShell.close();
@@ -134,16 +146,41 @@
         }
     }
 
-    function armRpcNoVideoWatchdog(session) {
-        if ((!session.rpcWindowMode && !session.electronCompactLauncher) || session.rpcAutoClosed) return;
-        clearSessionTimer(session, 'rpcNoVideoTimer');
-        const ms = Math.max(3000, Number(session.rpcVideoTimeoutMs) || 90000);
-        session.rpcNoVideoTimer = setTimeout(function () {
-            session.rpcNoVideoTimer = null;
-            if (!session.rpcHadVideo) {
-                closeRpcShellOrWindow(session, 'timeout_no_video_' + ms + 'ms');
+    function forceExitVideoPageOnNoVideoTimeout(session, doc, ui, reason) {
+        if (rpcShellCloseAllowed(session)) {
+            closeRpcShellOrWindow(session, reason);
+            return;
+        }
+        const app = window.__rpcApp;
+        if (app && typeof app.stop === 'function') {
+            try {
+                app.stop();
+            } catch (_) {
+                hideVideoStage(doc);
             }
-        }, ms);
+        } else {
+            hideVideoStage(doc);
+            const v = getMainVideo(doc);
+            if (v) v.srcObject = null;
+        }
+        if (ui) logDataChannel(ui, '10 秒无视频流，已退出画面（' + reason + '）');
+    }
+
+    function armRpcNoVideoWatchdog(session, doc, ui) {
+        if (session.rpcAutoClosed) return;
+        clearSessionTimer(session, 'rpcNoVideoTimer');
+        const ms = Math.max(3000, Number(session.rpcVideoTimeoutMs) || 10000);
+        session.rpcVideoPageOpenedAt = Date.now();
+        session.rpcNoVideoTimer = setInterval(function () {
+            if (session.rpcAutoClosed) return;
+            const stage = getVideoStage(doc);
+            if (!stage || stage.hidden) return;
+            const baseTs = session.rpcVideoLastAliveAt || session.rpcVideoPageOpenedAt;
+            if (!baseTs) return;
+            if ((Date.now() - baseTs) < ms) return;
+            clearSessionTimer(session, 'rpcNoVideoTimer');
+            forceExitVideoPageOnNoVideoTimeout(session, doc, ui, 'timeout_no_video_' + ms + 'ms');
+        }, 1000);
     }
 
     function clearRpcNoVideoWatchdog(session) {
@@ -152,7 +189,7 @@
 
     function onRpcVideoStreamReady(session) {
         session.rpcHadVideo = true;
-        clearRpcNoVideoWatchdog(session);
+        session.rpcVideoLastAliveAt = Date.now();
         clearSessionTimer(session, 'rpcWsConnectTimer');
     }
 
@@ -187,8 +224,8 @@
         session.rpcWindowMode = rpcWindow;
         session.rpcAutostart = rpcAutostart;
         if (rpcWindow) {
-            const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '90000', 10);
-            session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 90000;
+            const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '10000', 10);
+            session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 10000;
 
             // Pass app exe path from URL for multi-window desktop container.
             const exePathParam = params.get('exePath');
@@ -494,11 +531,11 @@
         if (stopBtn) stopBtn.disabled = false;
         this.sendRequest();
         logDataChannel(this.ui, 'Connection started');
-        if (this.session.rpcWindowMode || this.session.electronCompactLauncher) {
-            armRpcNoVideoWatchdog(this.session);
-            if (this.session.electronCompactLauncher && !this.session.rpcAutostart) {
-                armRpcWebSocketConnectWatchdog(this.session);
-            }
+        this.session.rpcHadVideo = false;
+        this.session.rpcVideoLastAliveAt = 0;
+        armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
+        if (this.session.electronCompactLauncher && !this.session.rpcAutostart) {
+            armRpcWebSocketConnectWatchdog(this.session);
         }
     };
 
@@ -562,6 +599,7 @@
             this.start();
         } else {
             showVideoStage(this.session, this.doc);
+            armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
             if (this.webrtc) this.webrtc.reattachVideoToMain();
         }
     };
@@ -726,6 +764,14 @@
             });
         }
         this.bindDom();
+        {
+            const stage = getVideoStage(this.doc);
+            if (stage && !stage.hidden) {
+                this.session.rpcHadVideo = false;
+                this.session.rpcVideoLastAliveAt = 0;
+                armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
+            }
+        }
         /* 紧凑模式且手动双击再连：勿在启动页就开始「信令 10s 未连上关窗」，改到 start() 再计时 */
         const deferWsWatchdog =
             this.session.electronCompactLauncher && !this.session.rpcAutostart;

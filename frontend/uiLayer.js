@@ -75,7 +75,12 @@
         if (!iw || !ih) return null;
         const rw = rect.width;
         const rh = rect.height;
-        const scale = Math.min(rw / iw, rh / ih);
+        let fitMode = 'contain';
+        try {
+            const cs = window.getComputedStyle ? window.getComputedStyle(video) : null;
+            if (cs && cs.objectFit) fitMode = String(cs.objectFit).toLowerCase();
+        } catch (_) {}
+        const scale = (fitMode === 'cover') ? Math.max(rw / iw, rh / ih) : Math.min(rw / iw, rh / ih);
         const contentW = iw * scale;
         const contentH = ih * scale;
         const offsetX = (rw - contentW) / 2;
@@ -164,6 +169,7 @@
         if (session.activeVideo && session.activeVideo.srcObject) {
             session.activeVideo.play().catch(function () {});
             applyVideoDisplaySize(session.activeVideo);
+            notifyParentVideoResolution(doc, session.activeVideo);
         }
     }
 
@@ -179,6 +185,23 @@
         const v = getMainVideo(doc);
         const el = doc.getElementById('rpc-video-size');
         if (el && v) el.textContent = v.videoWidth + ' x ' + v.videoHeight;
+        notifyParentVideoResolution(doc, v);
+    }
+
+    function notifyParentVideoResolution(doc, videoEl) {
+        if (!doc || !videoEl) return;
+        const w = videoEl.videoWidth || 0;
+        const h = videoEl.videoHeight || 0;
+        if (!w || !h) return;
+        try {
+            if (window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
+                window.parent.postMessage({
+                    type: 'rpc_video_resolution',
+                    width: w,
+                    height: h,
+                }, '*');
+            }
+        } catch (_) {}
     }
 
     function canSendControl(session) {

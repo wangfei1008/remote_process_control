@@ -470,6 +470,7 @@
             const vtrack = mediaStream.getVideoTracks && mediaStream.getVideoTracks()[0];
             if (vtrack && vtrack.addEventListener) {
                 vtrack.addEventListener('unmute', function () {
+                    i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
                     tryPlay();
                     i.applyVideoDisplaySize && i.applyVideoDisplaySize(session.activeVideo);
                     updateVideoSizeInfo(doc);
@@ -479,10 +480,7 @@
                 if (session.activeVideo.videoWidth && session.activeVideo.videoHeight) {
                     session.rpcStreamW = session.activeVideo.videoWidth;
                     session.rpcStreamH = session.activeVideo.videoHeight;
-                    /* Electron 紧凑模式往往未带 rpcWindow=1，也必须置位，否则 10s 无视频定时器会一直误判 */
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
-                        i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
-                    }
+                    i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
                 }
                 i.applyVideoDisplaySize && i.applyVideoDisplaySize(session.activeVideo);
                 updateVideoSizeInfo(doc);
@@ -492,7 +490,6 @@
             };
             session.activeVideo.onplay = function () { i.setupRemoteControl && i.setupRemoteControl(session, doc); };
             session.activeVideo.onplaying = function () {
-                if (session.rpcHadVideo || (!session.rpcWindowMode && !session.electronCompactLauncher)) return;
                 if (session.activeVideo.videoWidth && session.activeVideo.videoHeight) {
                     session.rpcStreamW = session.activeVideo.videoWidth;
                     session.rpcStreamH = session.activeVideo.videoHeight;
@@ -507,12 +504,22 @@
                 if (v.videoWidth && v.videoHeight) {
                     session.rpcStreamW = v.videoWidth;
                     session.rpcStreamH = v.videoHeight;
+                    i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
                 }
                 const now = Date.now();
                 if (v.__rpc_last_resize_apply_ms != null && (now - v.__rpc_last_resize_apply_ms) < 200) return;
                 v.__rpc_last_resize_apply_ms = now;
                 updateVideoSizeInfo(doc);
             });
+            if (typeof session.activeVideo.requestVideoFrameCallback === 'function') {
+                const vv = session.activeVideo;
+                const onVideoFrame = function () {
+                    if (!session.activeVideo || session.activeVideo !== vv) return;
+                    i.onRpcVideoStreamReady && i.onRpcVideoStreamReady(session);
+                    vv.requestVideoFrameCallback(onVideoFrame);
+                };
+                vv.requestVideoFrameCallback(onVideoFrame);
+            }
             function tryPlay() {
                 const p = session.activeVideo.play();
                 if (p && typeof p.catch === 'function') {

@@ -383,6 +383,11 @@
             });
             windows.forEach(function (st) {
                 if (st && st.taskBtn) st.taskBtn.remove();
+                if (st && st.messageHandler) {
+                    try {
+                        window.removeEventListener('message', st.messageHandler);
+                    } catch (_) {}
+                }
             });
             windows.clear();
         }
@@ -408,14 +413,15 @@
             const winId = 'win_' + randomId(8);
             const idx = windows.size;
             const isMyData = app.kind === 'my_data' || (app.launchPath && app.launchPath.indexOf('my_data.html') >= 0);
+            const isRpcVideoWindow = !isMyData;
             const viewportW = Math.max(800, window.innerWidth || 1280);
             const viewportH = Math.max(600, window.innerHeight || 720);
-            const defaultW = isMyData ? Math.max(960, Math.floor(viewportW * 0.82)) : 640;
-            const defaultH = isMyData ? Math.max(620, Math.floor((viewportH - 48) * 0.8)) : 400;
-            const startLeft = isMyData
+            const defaultW = isMyData ? Math.max(960, Math.floor(viewportW * 0.82)) : Math.max(640, Math.floor(viewportW * 0.7));
+            const defaultH = isMyData ? Math.max(620, Math.floor((viewportH - 48) * 0.8)) : Math.max(360, Math.floor((viewportH - 48) * 0.7));
+            const startLeft = (isMyData || isRpcVideoWindow)
                 ? Math.max(12, Math.floor((viewportW - defaultW) / 2))
                 : (40 + idx * 24);
-            const startTop = isMyData
+            const startTop = (isMyData || isRpcVideoWindow)
                 ? Math.max(12, Math.floor(((viewportH - 48) - defaultH) / 2))
                 : (40 + idx * 24);
 
@@ -433,6 +439,7 @@
             winEl.style.boxShadow = '0 16px 50px rgba(0,0,0,0.45)';
             winEl.style.background = '#000';
             winEl.style.zIndex = String(zCounter++);
+            const titlebarHeight = isRpcVideoWindow ? 0 : 30;
 
             const titlebar = doc.createElement('div');
             titlebar.style.height = '30px';
@@ -506,7 +513,7 @@
             content.style.position = 'absolute';
             content.style.left = '0';
             content.style.right = '0';
-            content.style.top = '30px';
+            content.style.top = String(titlebarHeight) + 'px';
             content.style.bottom = '0';
 
             const iframe = doc.createElement('iframe');
@@ -530,9 +537,13 @@
             resizer.addEventListener('mouseenter', function () { resizer.style.opacity = '0.6'; });
             resizer.addEventListener('mouseleave', function () { resizer.style.opacity = '0.25'; });
 
-            winEl.appendChild(titlebar);
+            if (!isRpcVideoWindow) {
+                winEl.appendChild(titlebar);
+            }
             winEl.appendChild(content);
-            winEl.appendChild(resizer);
+            if (!isRpcVideoWindow) {
+                winEl.appendChild(resizer);
+            }
             windowLayer.appendChild(winEl);
 
             // Drag
@@ -639,6 +650,41 @@
                 bringToFront(winEl);
             }
 
+            function fitWindowToVideoResolution(videoW, videoH) {
+                if (!isRpcVideoWindow) return;
+                const vw = Number(videoW) || 0;
+                const vh = Number(videoH) || 0;
+                if (!vw || !vh) return;
+                const stageH = Math.max(360, (window.innerHeight || 720) - 48);
+                const maxW = Math.max(640, Math.floor((window.innerWidth || 1280) * 0.9));
+                const maxH = Math.max(360, Math.floor(stageH * 0.9));
+                let targetW = vw;
+                let targetH = vh;
+                const scale = Math.min(maxW / targetW, maxH / targetH, 1);
+                targetW = Math.round(targetW * scale);
+                targetH = Math.round(targetH * scale);
+                winEl.style.width = String(Math.max(320, targetW)) + 'px';
+                winEl.style.height = String(Math.max(180, targetH)) + 'px';
+                const left = Math.max(12, Math.floor(((window.innerWidth || 1280) - targetW) / 2));
+                const top = Math.max(12, Math.floor((stageH - targetH) / 2));
+                winEl.style.left = String(left) + 'px';
+                winEl.style.top = String(top) + 'px';
+            }
+
+            function onChildFrameMessage(event) {
+                if (!event || !event.source || event.source !== iframe.contentWindow) return;
+                const data = event.data;
+                if (!data || !data.type) return;
+                if (data.type === 'rpc_video_resolution') {
+                    fitWindowToVideoResolution(data.width, data.height);
+                    return;
+                }
+                if (data.type === 'rpc_request_close') {
+                    closeWindow();
+                }
+            }
+            window.addEventListener('message', onChildFrameMessage);
+
             const taskBtn = doc.createElement('div');
             taskBtn.textContent = taskIconText ? (taskIconText + ' ' + taskNameText) : taskNameText;
             taskBtn.style.flex = '0 0 auto';
@@ -660,20 +706,31 @@
                 if (st.minimized) restore();
                 else minimize();
             });
+            taskBtn.addEventListener('contextmenu', function (e) {
+                e.preventDefault();
+                closeWindow();
+            });
             appsStrip.appendChild(taskBtn);
 
-            minBtn.addEventListener('click', function (e) { e.stopPropagation(); minimize(); });
-            closeBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
+            function closeWindow() {
                 const st = windows.get(winId);
                 try {
                     if (iframe && iframe.contentWindow && iframe.contentWindow.__rpcApp && iframe.contentWindow.__rpcApp.stop) {
                         iframe.contentWindow.__rpcApp.stop();
                     }
                 } catch (_) {}
+                try {
+                    window.removeEventListener('message', onChildFrameMessage);
+                } catch (_) {}
                 if (st && st.taskBtn) st.taskBtn.remove();
                 windows.delete(winId);
                 winEl.remove();
+            }
+
+            minBtn.addEventListener('click', function (e) { e.stopPropagation(); minimize(); });
+            closeBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                closeWindow();
             });
 
             windows.set(winId, {
@@ -683,6 +740,7 @@
                 taskBtn: taskBtn,
                 minimized: false,
                 lastBounds: null,
+                messageHandler: onChildFrameMessage,
             });
             bringToFront(winEl);
         }

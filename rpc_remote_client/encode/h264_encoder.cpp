@@ -99,6 +99,19 @@ struct EncoderCache {
 std::mutex g_cache_mtx;
 std::unordered_map<AVCodecContext*, EncoderCache> g_encoder_cache;
 
+AVPixelFormat choose_encoder_pix_fmt(const AVCodec* codec) {
+    if (!codec || !codec->pix_fmts) return AV_PIX_FMT_YUV420P;
+    const AVPixelFormat* p = codec->pix_fmts;
+    bool has_yuv420p = false;
+    while (*p != AV_PIX_FMT_NONE) {
+        if (*p == AV_PIX_FMT_NV12) return AV_PIX_FMT_NV12;
+        if (*p == AV_PIX_FMT_YUV420P) has_yuv420p = true;
+        ++p;
+    }
+    if (has_yuv420p) return AV_PIX_FMT_YUV420P;
+    return codec->pix_fmts[0];
+}
+
 void free_encoder_cache(AVCodecContext* ctx) {
     if (!ctx) return;
     auto it = g_encoder_cache.find(ctx);
@@ -130,9 +143,10 @@ bool ensure_encoder_cache(AVCodecContext* ctx, int srcW, int srcH) {
     cache.dst_width = dstW;
     cache.dst_height = dstH;
 
+    const AVPixelFormat dst_pix_fmt = static_cast<AVPixelFormat>(ctx->pix_fmt);
     cache.sws_ctx = sws_getContext(
         srcW, srcH, AV_PIX_FMT_RGB24,
-        dstW, dstH, AV_PIX_FMT_YUV420P,
+        dstW, dstH, dst_pix_fmt,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (!cache.sws_ctx) return false;
 
@@ -144,7 +158,7 @@ bool ensure_encoder_cache(AVCodecContext* ctx, int srcW, int srcH) {
     cache.rgb_frame->width = srcW;
     cache.rgb_frame->height = srcH;
 
-    cache.yuv_frame->format = AV_PIX_FMT_YUV420P;
+    cache.yuv_frame->format = static_cast<int>(dst_pix_fmt);
     cache.yuv_frame->width = dstW;
     cache.yuv_frame->height = dstH;
     if (av_frame_get_buffer(cache.yuv_frame, 32) < 0) return false;
@@ -209,7 +223,7 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
         // 关键帧间隔过短（如每几帧一个 IDR）即使在局域网也可能出现周期性脉动。
         ctx->gop_size = std::max<int>(24, fp);
         ctx->max_b_frames = 0;
-        ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+        ctx->pix_fmt = choose_encoder_pix_fmt(codec);
 
         const int64_t px = static_cast<int64_t>(width) * static_cast<int64_t>(height);
         // 码率设置适度保守，避免抖动下接收端解码掉帧。
@@ -220,7 +234,7 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
         ctx->rc_buffer_size = static_cast<int>(std::max<int64_t>(500000LL, br / 2));
 
         if (ctx->priv_data) {
-            if (backendName == "libx264" || backendName == "h264") {
+            if (backendName == "libx264") {
                 av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
                 av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
                 av_opt_set(ctx->priv_data, "profile", "baseline", 0);
@@ -242,7 +256,9 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
         }
 
         if (avcodec_open2(ctx, codec, nullptr) == 0) {
-            std::cout << "[encoder] selected backend=" << backendName << std::endl;
+            std::cout << "[encoder] selected backend=" << backendName
+                      << " pix_fmt=" << static_cast<int>(ctx->pix_fmt)
+                      << std::endl;
             return ctx;
         }
         std::cerr << "[encoder] failed backend=" << backendName << ", trying fallback" << std::endl;

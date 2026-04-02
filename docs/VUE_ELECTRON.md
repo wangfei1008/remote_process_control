@@ -1,16 +1,28 @@
-# 使用 Vue + 独立窗口：是否必须用 Electron？
+# Vue / Electron 说明（当前仓库）
 
-**不必。** Electron 只是选项之一；在国内网络下 **Electron 安装容易卡住**，推荐优先：
+当前仓库仅包含原生前端目录 `frontend/`，不包含 `frontend-vue-electron/` 或 Electron 壳工程。
 
-- **`scripts/open-remote-app.ps1`** — 系统 **Edge/Chrome `--app`** 模式（见 **`WITHOUT_ELECTRON.md`**）
-- **`webview2-launcher/`** — **.NET + WebView2**，体积小
+## 结论
 
-## Vue 与本仓库
+- 运行本项目不需要 Vue，也不需要 Electron。
+- 推荐直接使用 `frontend/index.html`（可 `file://` 打开）。
+- 若需要“应用窗口”体验，使用浏览器 `--app` 方式，见 `WITHOUT_ELECTRON.md`。
 
-- **`frontend-vue-electron/`**：**Vue 3 + Vite**，默认 **不含 Electron**，仅做开发与打包；页面仍加载 **`../frontend/client.js`**。
-- 若网络畅通且需要 Electron 生态，可自行安装 Electron 或使用 **[electron-vite](https://github.com/electron-vite/electron-vite)** 模板。
+---
 
-## 技术注意点
+## 如果你要自建 Vue 前端
 
-- **单文件 `client.js`** 不是 ES 模块时，在 Vue 里继续用 `<script src="/client.js" defer>`，或逐步改成 `export` 模块再 `import`。
-- **应用模式**（`rpcWindow=1`）、**自动关窗** 等逻辑在 **`client.js`**；**`window.rpcShell.close()`** 仅在 **WebView2 启动器** 或 **Electron** 等注入桥接时有效，纯 `--app` 浏览器可能无法 `window.close()`，见 **`WITHOUT_ELECTRON.md`**。
+可以新建独立目录（例如 `frontend-vue/`），按以下思路迁移：
+
+1. 保留现有信令与 WebRTC 协议不变（消息结构保持兼容）。
+2. 将 `frontend/client.js` 中的状态与流程拆成模块（session/signaling/webrtc/ui）。
+3. “我的数据”页面可先 iframe 复用 `my_data.html`，再逐步组件化重写。
+4. 保持 URL 参数语义一致（`rpcWindow`、`autostart`、`signaling`）。
+
+---
+
+## 如果你要自建 Electron 壳
+
+- 建议新建独立工程目录，加载 `frontend/index.html`。
+- 通过 preload 注入桥接对象（如 `window.rpcShell.close()`）以支持可控关窗。
+- 保证前端在“无桥接环境”可降级运行（浏览器直接打开仍可用）。

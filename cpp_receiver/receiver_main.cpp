@@ -1345,6 +1345,50 @@ static void ApplyFullscreenPrimary(HWND hwnd) {
 	SetWindowPos(hwnd, HWND_TOP, r.left, r.top, w, h, SWP_SHOWWINDOW);
 }
 
+static void ResizeWindowToVideoResolution(HWND hwnd, int videoW, int videoH) {
+	if (!hwnd || !g_windowed || videoW <= 0 || videoH <= 0) return;
+
+	static int s_lastAppliedVideoW = 0;
+	static int s_lastAppliedVideoH = 0;
+	if (s_lastAppliedVideoW == videoW && s_lastAppliedVideoH == videoH) return;
+
+	RECT work{};
+	SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+	const int workW = (std::max)(1, (int)(work.right - work.left));
+	const int workH = (std::max)(1, (int)(work.bottom - work.top));
+
+	// Windowed mode: follow incoming video resolution while keeping window inside work area.
+	double scale = 1.0;
+	if (videoW > workW || videoH > workH) {
+		const double sx = (double)workW / (double)videoW;
+		const double sy = (double)workH / (double)videoH;
+		scale = (std::min)(sx, sy);
+	}
+	const int targetClientW = (std::max)(320, (int)std::round((double)videoW * scale));
+	const int targetClientH = (std::max)(180, (int)std::round((double)videoH * scale));
+
+	RECT rc{ 0, 0, targetClientW, targetClientH };
+	AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+	const int winW = rc.right - rc.left;
+	const int winH = rc.bottom - rc.top;
+
+	RECT cur{};
+	GetWindowRect(hwnd, &cur);
+	const int curW = cur.right - cur.left;
+	const int curH = cur.bottom - cur.top;
+	if (curW == winW && curH == winH) {
+		s_lastAppliedVideoW = videoW;
+		s_lastAppliedVideoH = videoH;
+		return;
+	}
+
+	const int x = work.left + (workW - winW) / 2;
+	const int y = work.top + (workH - winH) / 2;
+	SetWindowPos(hwnd, nullptr, x, y, winW, winH, SWP_NOZORDER | SWP_NOACTIVATE);
+	s_lastAppliedVideoW = videoW;
+	s_lastAppliedVideoH = videoH;
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 	case WM_DESTROY:
@@ -1715,6 +1759,7 @@ int main(int argc, char** argv) {
 				(unsigned long long)decodedIndex, w, h);
 			++g_debugPrintedFrames;
 		}
+		ResizeWindowToVideoResolution(g_hwnd, w, h);
 
 		// Publish texture update + draw.
 		// Note: access violations may not be caught by C++ exceptions.

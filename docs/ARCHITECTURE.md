@@ -1,87 +1,74 @@
-# 架构说明（前端 / 信令 / Windows 客户端）
+# 架构说明（当前仓库版本）
 
-本文描述三端分层、设计模式与目录约定，便于后续演进（鉴权、房间、配置化等）。
+本文按当前代码结构说明前端、信令与 Windows 客户端协作方式，内容以仓库现状为准。
 
 ## 总览
 
 ```
-浏览器 (前端)  <--WebSocket 信令-->  Qt 信令服务器  <--WebSocket 信令-->  Windows 客户端
-     ^                                                               |
-     +-------------------- WebRTC (SRTP / DataChannel) --------------+
+前端（浏览器） <--WebSocket 信令--> Qt 信令服务 <--WebSocket 信令--> rpc_remote_client
+      ^                                                           |
+      +---------------- WebRTC(视频轨 + DataChannel) -------------+
 ```
 
-- **信令**：仅转发 JSON（`id` 为目标端标识），不解析 SDP 语义。
-- **媒体与控制**：WebRTC；控制走 DataChannel。
+- 信令层仅做 JSON 中继（按 `id` 路由）。
+- 媒体与输入控制都走 WebRTC。
+- 文件上传下载复用 DataChannel，和远程控制共用连接体系。
 
 ---
 
 ## 前端（`frontend/`）
 
-### 结构
+### 主要文件
 
-- **`client.js`**：单文件 IIFE，内含会话状态、信令、WebRTC、输入映射与 DOM 绑定（无 `import`，兼容 **`file://`**）。
-- **`index.html`** / **`style.css`**：页面与样式。
+- `index.html`：主页面，包含连接面板、状态面板、远程视频层。
+- `desktopMode.js`：桌面容器、多窗口管理、应用图标（含“我的数据”）。
+- `my_data.html` / `my_data.js`：远端文件浏览、预览、上传、下载、传输日志。
+- `client.js`：会话状态与入口初始化（URL 参数、自动连接、桌面模式对接）。
+- `signalingLayer.js` / `webrtcLayer.js` / `uiLayer.js`：按职责拆分的前端逻辑层。
 
-### 模式（逻辑上仍可按层理解）
+### 运行特性
 
-- **Facade**：`RemoteProcessApplication` 原型方法组装 WebSocket + RTCPeerConnection + DataChannel。
-- **会话状态**：`createSession()` 返回的 plain object 在页面生命周期内共享。
-- **工厂函数**：`createWebRtcSessionController`、`createSignalingClient` 在闭包内注入 `session` / `document` / `ui`。
-
-### 加载方式
-
-- `index.html` 使用 `<script src="./client.js" defer>`；可在 **Chrome 下 `file://` 双击打开**。
+- 支持 `file://` 直接打开 `frontend/index.html`。
+- 支持 `rpcWindow=1`/`kiosk=1`、`autostart`、`signaling` 等 URL 参数。
+- “我的数据”通过 DataChannel 与后端 `FileTransferService` 通信。
 
 ---
 
-## 信令服务器（`signaling-server-qt/`）
+## 信令服务（`signaling-server-qt/`）
+
+### 主要组件
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| ClientRegistry | `core/ClientRegistry.*` | 维护 `id -> websocket` 映射 |
+| SignalingRelay | `core/SignalingRelay.*` | 校验并转发信令消息 |
+| SignalingServer | `SignalingServer.*` | 监听连接与生命周期管理 |
+| 程序入口 | `main.cpp` | 默认监听 `0.0.0.0:9090`，支持命令行 host/port |
+
+---
+
+## Windows 远端客户端（`rpc_remote_client/`）
 
 ### 分层
 
-| 组件 | 文件 | 模式 / 职责 |
-|------|------|-------------|
-| **ClientRegistry** | `core/ClientRegistry.*` | **注册表**：`id → QWebSocket*` |
-| **SignalingRelay** | `core/SignalingRelay.*` | **策略 / 路由**：解析 JSON、改写 `id` 为来源、转发给目标 |
-| **SignalingServer** | `SignalingServer.*` | **门面**：监听连接、生命周期、日志；委托 Registry + Relay |
-
-### 扩展建议
-
-- 鉴权、房间：在 `SignalingRelay::relayTextMessage` 前增加 **责任链** 或 **中间件**。
-- 指标：对 `relayTextMessage` 包装 **装饰器** 记录延迟与字节数。
-
----
-
-## Windows 客户端（`remote_process_control/`）
-
-### 逻辑分层（当前以文件为界，未强制子目录）
-
-| 层 | 典型单元 | 职责 |
+| 层 | 典型文件 | 职责 |
 |----|----------|------|
-| **信令与会话** | `webrtc_socket`, `client_peer_connection`, `dispatch_queue` | WebSocket、PeerConnection、每客户端轨道与 DataChannel 消息 |
-| **媒体管线** | `stream`, `process_manager`, `window_capture`, `h264_encoder`, … | 采集、编码、按时间片送样 |
-| **输入适配** | `input_controller` | `SendInput`、坐标映射、前台窗口 |
-| **入口** | `main.cpp` | 进程入口、启动 `WebRTCSocket` |
+| 连接与会话 | `transport/webrtc_socket.*`, `transport/client_peer_connection.*` | 信令收发、PeerConnection、DataChannel 消息分发 |
+| 文件传输 | `transport/file_transfer_service.*` | 文件列表/预览/上传/下载、分片与偏移、路径安全校验 |
+| 媒体采集与编码 | `capture/*`, `encode/*`, `session/*`, `source/*` | 画面采集、H264 编码、媒体流输出 |
+| 输入控制 | `input/input_controller.*` | 鼠标键盘注入 |
+| 配置与入口 | `common/runtime_config.h`, `main.cpp` | 读取 `rpc_config.ini`、启动 WebRTC Socket |
 
-### 模式（现有代码体现）
+### 关键实现说明
 
-- **每连接对象**：`ClientPeerConnection` 封装单个浏览器端的信令与媒体状态。
-- **单线程队列**：`DispatchQueue` 将 WebRTC 回调派发到固定线程，减少竞态。
-- **单例**（输入）：`InputController::instance()` 与 OS 全局输入子系统对应。
-
-### 物理目录重构（可选后续）
-
-若需与文档完全一致，可将源码迁至：
-
-- `signaling/`：`webrtc_socket`, `client_peer_connection`, `dispatch_queue`
-- `media/`：`stream`, `process_manager`, 采集与编码相关文件
-- `input/`：`input_controller`
-- `app/`：`main.cpp`
-
-并在 VS 工程中配置 **附加包含目录** 为各子目录，避免 `#include` 大规模改名。
+- 文件根目录由 `RPC_DATA_ROOT` 限定，路径会校验“必须在根目录内”。
+- 分片大小由 `RPC_FILE_CHUNK_SIZE` 控制，前后端需保持一致量级。
+- DataChannel 心跳仅匹配纯 `Pong` 文本，避免误伤文件分片消息。
 
 ---
 
-## 版本与兼容
+## 兼容与依赖
 
-- 前端依赖 **现代浏览器**（WebRTC + ES Modules）。
-- Qt 工程需 **Qt WebSockets**；C++ 标准见各 `.pro` / `.vcxproj`。
+- 前端：现代浏览器（WebRTC/DataChannel）。
+- 信令：Qt + Qt WebSockets。
+- 远端客户端：Windows + Visual Studio C++ 工具链。
