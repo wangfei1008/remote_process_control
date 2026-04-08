@@ -1,8 +1,10 @@
 #include "transport/webrtc_socket.h"
-#include "transport/rpc_media_session.h"
-#include "source/stream.h"
+#include <algorithm>
 #include <thread>
 #include <chrono>
+#include "input/input_controller.h"
+#include "session/remote_process_stream_source.h"
+#include "source/silence_opus_source.h"
 #include "common/runtime_config.h"
 
 using namespace std::chrono_literals;
@@ -12,17 +14,22 @@ WebRTCSocket::WebRTCSocket()
     , m_signaling_ip("")
     , m_signaling_url("")
     , m_thread_queue("WebRTCSocket")
-    , m_media_session(std::make_unique<RpcMediaSession>())
 {
 	rtc::InitLogger(rtc::LogLevel::Info);
     m_stun_server = runtime_config::get_string("RPC_WEBRTC_STUN_SERVER", "stun.l.google.com:19302");
     m_signaling_local_id = runtime_config::get_string("RPC_SIGNALING_LOCAL_ID", "server");
-}
+    m_frame_mark_interval = static_cast<uint64_t>((std::max)(1, runtime_config::get_int("RPC_FRAME_MARK_INTERVAL", 10)));
+    m_capture_health_interval = static_cast<uint64_t>((std::max)(1, runtime_config::get_int("RPC_CAPTURE_HEALTH_INTERVAL", 30)));
 
-WebRTCSocket::~WebRTCSocket() = default;
+    FileTransferService::Options options;
+    options.data_root = runtime_config::get_string("RPC_DATA_ROOT", "D:\\rpc_data");
+    options.default_chunk_size = static_cast<std::size_t>(runtime_config::get_int("RPC_FILE_CHUNK_SIZE", 512 * 1024));
+    m_file_transfer_service = std::make_shared<FileTransferService>(std::move(options));
+}
 
 void WebRTCSocket::start(const std::string& ip, int port)
 {
+	InputController::ensure_process_dpi_awareness();
 	m_signaling_ip = ip;
     m_signaling_port = port;
 	_init_signaling();
@@ -102,22 +109,14 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
         if (media_enabled) {
             _stop_and_reset_stream();
         } else {
-            std::shared_ptr<ClientPeerConnection> old_client;
-            {
-                std::unique_lock<std::shared_mutex> lk(m_clients_mtx);
-                auto it_client = m_clients.find(id);
-                if (it_client != m_clients.end()) {
-                    old_client = it_client->second;
-                    m_clients.erase(it_client);
-                }
-            }
-            if (old_client) {
+            if (auto it_client = m_clients.find(id); it_client != m_clients.end()) {
                 try {
-                    if (auto old_pc = old_client->get_peer_connection()) {
+                    if (auto old_pc = it_client->second->get_peer_connection()) {
                         old_pc->close();
                     }
                 } catch (...) {
                 }
+                m_clients.erase(it_client);
                 _release_control(id);
             }
         }
@@ -125,7 +124,13 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
         // 进程路径由前端请求提供；未提供则不启动远程进程、不发送视频。
         if (media_enabled) {
             const std::string exePath = message.value("exePath", "");
-            m_media_session->reset_for_new_media_request(exePath);
+            std::scoped_lock lk(m_stream_mtx);
+            m_exe_path = exePath;
+            // 重置流，确保下次启动严格使用本次请求路径（或保持为空）。
+            if (m_stream) {
+                m_stream->stop();
+                m_stream.reset();
+            }
         }
 
         auto pc = _init_peer_connection(id);
@@ -134,7 +139,7 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
             [this](const std::string& clientId, std::shared_ptr<rtc::DataChannel> dc) { return _request_control(clientId, dc); },
             [this](const std::string& clientId) { _release_control(clientId); },
             [this](const std::string& clientId) { return _is_controller(clientId); },
-            m_media_session->file_transfer_service(),
+            m_file_transfer_service,
             media_enabled
         );
         if (media_enabled) {
@@ -143,22 +148,14 @@ inline void WebRTCSocket::_on_message(nlohmann::json message)
             });
         }
 
-        {
-            std::unique_lock<std::shared_mutex> lk(m_clients_mtx);
-            m_clients.emplace(id, client);
-        }
+        m_clients.emplace(id, client);
         pc->setLocalDescription();
     }
     else if (type == "answer") // SDP 应答
     {
-        std::shared_ptr<ClientPeerConnection> client;
+        if (auto jt = m_clients.find(id); jt != m_clients.end()) 
         {
-            std::shared_lock<std::shared_mutex> lk(m_clients_mtx);
-            auto jt = m_clients.find(id);
-            if (jt != m_clients.end()) client = jt->second;
-        }
-        if (client) {
-            auto pc = client->get_peer_connection();
+            auto pc = jt->second->get_peer_connection();
             auto sdp = message["sdp"].get<std::string>();
             auto description = rtc::Description(sdp, type);
             pc->setRemoteDescription(description);
@@ -182,20 +179,12 @@ std::shared_ptr<rtc::PeerConnection> WebRTCSocket::_init_peer_connection(const s
                 state == rtc::PeerConnection::State::Closed) {
                 // 移除断开的客户端
                 m_thread_queue.dispatch([id, this]() {
-                    {
-                        std::unique_lock<std::shared_mutex> lk(m_clients_mtx);
-                        m_clients.erase(id);
-                    }
+                    m_clients.erase(id);
                     _release_control(id);
                     // 强生命周期保证：
                     // 当前端关闭页面/流且无客户端时，
                     // 立即释放进程与流资源。
-                    bool empty = false;
-                    {
-                        std::shared_lock<std::shared_mutex> lk(m_clients_mtx);
-                        empty = m_clients.empty();
-                    }
-                    if (empty) {
+                    if (m_clients.empty()) {
                         _stop_and_reset_stream();
                     }
                 });
@@ -224,47 +213,223 @@ std::shared_ptr<rtc::PeerConnection> WebRTCSocket::_init_peer_connection(const s
     return pc;
 }
 
-std::vector<std::shared_ptr<ClientPeerConnection>> WebRTCSocket::_snapshot_clients() const
-{
-    std::vector<std::shared_ptr<ClientPeerConnection>> clients;
-    std::shared_lock<std::shared_mutex> lk(m_clients_mtx);
-    clients.reserve(m_clients.size());
-    for (const auto& kv : m_clients) clients.push_back(kv.second);
-    return clients;
-}
-
 std::shared_ptr<Stream> WebRTCSocket::_get_or_create_stream()
 {
-    return m_media_session->get_or_create_stream(
-        [this]() { return _snapshot_clients(); },
-        [this]() {
-            m_thread_queue.dispatch([this]() { _stop_stream_keep_clients(); });
-        },
-        [this]() {
-            m_thread_queue.dispatch([this]() {
-                bool empty = false;
-                {
-                    std::shared_lock<std::shared_mutex> lk(m_clients_mtx);
-                    empty = m_clients.empty();
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        if (m_stream) return m_stream;
+    }
+
+    std::cout << "[stream] _get_or_create_stream begin" << std::endl;
+
+    std::string exePath;
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        exePath = m_exe_path;
+    }
+    if (exePath.empty()) {
+        std::cout << "[stream] exePath missing from request, skip remote process launch" << std::endl;
+        return nullptr;
+    }
+    std::cout << "[stream] launching exePath=" << exePath << std::endl;
+
+    auto video = std::make_shared<RemoteProcessStreamSource>();
+    video->set_on_remote_exit([this]() {
+        m_thread_queue.dispatch([this]() {
+            _stop_stream_keep_clients();
+        });
+    });
+    video->launch_process(exePath);
+    auto audio = std::make_shared<SilenceOpusSource>();
+
+    auto stream = std::make_shared<Stream>(video, audio);
+    // 设置样本发送回调
+    stream->on_sample([ws = make_weak_ptr(stream), this](Stream::StreamSourceType type, uint64_t sampleTime, rtc::binary sample) {
+        static auto lastLog = std::chrono::steady_clock::now();
+        static uint64_t videoFrameIndex = 0;
+        static int lastVideoW = 0;
+        static int lastVideoH = 0;
+        if (type == Stream::StreamSourceType::Video) {
+            videoFrameIndex++;
+            if (auto s = ws.lock()) {
+                if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(s->m_c_video)) {
+                    const int curW = pm->get_capture_width();
+                    const int curH = pm->get_capture_height();
+                    if (curW > 0 && curH > 0 && (curW != lastVideoW || curH != lastVideoH)) {
+                        lastVideoW = curW;
+                        lastVideoH = curH;
+                        const nlohmann::json vres = {
+                            {"type", "videoResolution"},
+                            {"width", curW},
+                            {"height", curH},
+                        };
+                        const std::string vresPayload = vres.dump();
+                        for (const auto& id_client : m_clients) {
+                            auto ch = id_client.second->get_data_channel();
+                            if (!ch) continue;
+                            try {
+                                ch->send(vresPayload);
+                            } catch (...) {
+                            }
+                        }
+                    }
                 }
-                if (empty) m_media_session->stop_stream();
+            }
+            auto now = std::chrono::steady_clock::now();
+            if (now - lastLog > std::chrono::seconds(1)) {
+                lastLog = now;
+                std::cout << "[video] sampleTime(us)=" << sampleTime << " size=" << sample.size() << std::endl;
+                if (auto s = ws.lock()) {
+                    if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(s->m_c_video)) {
+                        std::cout << "[latency][sender] capture_ms=" << pm->get_last_capture_ms()
+                                  << " encode_ms=" << pm->get_last_encode_ms()
+                                  << " frame_unix_ms=" << pm->get_last_frame_unix_ms() << std::endl;
+                    }
+                }
+            }
+
+            // 降低 frameMark 发送频率，减少 DataChannel/JSON 开销。
+            if ((videoFrameIndex % m_frame_mark_interval) == 0) {
+                uint64_t srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                uint32_t cap_ms = 0;
+                uint32_t enc_ms = 0;
+                bool capHw = false;
+                bool dxgiDisabled = false;
+                int topBlackStripStreak = 0;
+                int dxgiInstabilityScore = 0;
+                uint64_t forceSwUntilMs = 0;
+                uint64_t lastFrameUnixMs = 0;
+                if (auto s = ws.lock()) {
+                    if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(s->m_c_video)) {
+                        cap_ms = pm->get_last_capture_ms();
+                        enc_ms = pm->get_last_encode_ms();
+                        const uint64_t fu = pm->get_last_frame_unix_ms();
+                        lastFrameUnixMs = fu;
+                        if (fu != 0) srv_wall = fu;
+                        capHw = pm->get_last_capture_used_hw();
+                        dxgiDisabled = pm->is_dxgi_disabled_for_session();
+                        topBlackStripStreak = pm->get_top_black_strip_streak();
+                        dxgiInstabilityScore = pm->get_dxgi_instability_score();
+                        forceSwUntilMs = pm->get_force_software_capture_until_unix_ms();
+                    }
+                }
+                // 诊断语义修正：
+                // 当发送端一段时间没有“新编码帧”时，last_frame_unix_ms 会停在旧值。
+                // 若继续拿旧值做 srvMs，前端会把差值误判成不断增长的网络延迟。
+                // 因此当时间戳明显过旧时，退回当前墙钟时间。
+                const uint64_t now_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                if (lastFrameUnixMs != 0 && now_wall > lastFrameUnixMs && (now_wall - lastFrameUnixMs) > 1000) {
+                    srv_wall = now_wall;
+                }
+                const nlohmann::json mark = {
+                    {"type", "frameMark"},
+                    {"seq", videoFrameIndex},
+                    {"srvMs", srv_wall},
+                    {"capMs", cap_ms},
+                    {"encMs", enc_ms},
+                };
+                const std::string payload = mark.dump();
+                for (const auto& id_client : m_clients) {
+                    auto ch = id_client.second->get_data_channel();
+                    if (!ch) continue;
+                    try {
+                        ch->send(payload);
+                    } catch (...) {
+                    }
+                }
+
+                // 发送采集健康遥测，供前端可视化与调试。
+                // 保持低频，避免额外信令开销。
+                if ((videoFrameIndex % m_capture_health_interval) == 0) {
+                    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                    const bool forceSwActive = (forceSwUntilMs != 0 && nowMs < forceSwUntilMs);
+                    const nlohmann::json health = {
+                        {"type", "captureHealth"},
+                        {"backend", capHw ? "dxgi" : "gdi"},
+                        {"dxgiDisabledForSession", dxgiDisabled},
+                        {"topBlackStripStreak", topBlackStripStreak},
+                        {"dxgiInstabilityScore", dxgiInstabilityScore},
+                        {"forceSoftwareActive", forceSwActive},
+                        {"forceSoftwareRemainMs", forceSwActive ? (forceSwUntilMs - nowMs) : 0},
+                        {"capMs", cap_ms},
+                        {"encMs", enc_ms},
+                    };
+                    const std::string healthPayload = health.dump();
+                    for (const auto& id_client : m_clients) {
+                        auto ch = id_client.second->get_data_channel();
+                        if (!ch) continue;
+                        try {
+                            ch->send(healthPayload);
+                        } catch (...) {
+                        }
+                    }
+                }
+            }
+        }
+        std::vector<ClientTrack> tracks{};
+        std::string streamType = type == Stream::StreamSourceType::Video ? "video" : "audio";
+
+        // 获取当前类型对应的轨道
+        std::function<std::optional<std::shared_ptr<ClientTrackData>>(std::shared_ptr<ClientPeerConnection>)> getTrackData = [type](std::shared_ptr<ClientPeerConnection> client)
+            {
+                return type == Stream::StreamSourceType::Video ? client->m_video: client->m_audio;
+            };
+        // 获取所有 Ready 状态客户端
+        for (auto id_client : m_clients) {
+            auto id = id_client.first;
+            auto client = id_client.second;
+
+            auto optTrackData = getTrackData(client);
+            if (client->get_state() == ClientPeerConnection::State::Ready && optTrackData.has_value()) {
+                auto trackData = optTrackData.value();
+                tracks.push_back(ClientTrack(id, trackData));
+            }
+        }
+        if (!tracks.empty()) {
+            const bool skipEmptyVideo =
+                (type == Stream::StreamSourceType::Video && sample.empty());
+            if (!skipEmptyVideo) {
+                for (auto clientTrack : tracks) {
+                    auto client = clientTrack.id;
+                    auto trackData = clientTrack.trackData;
+
+                    try {
+                        trackData->track->sendFrame(sample, std::chrono::duration<double, std::micro>(sampleTime));
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "Unable to send " << streamType << " packet: " << e.what() << std::endl;
+                    }
+                }
+            }
+        }
+        m_thread_queue.dispatch([ws, this]() {
+            if (m_clients.empty()) {
+                // 没有客户端时停止流
+                if (auto stream = ws.lock()) {
+                    stream->stop();
+                }
+            }
             });
         });
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        if (!m_stream) {
+            m_stream = stream;
+        }
+    }
+    std::cout << "[stream] _get_or_create_stream done" << std::endl;
+    return m_stream;
 }
 
 void WebRTCSocket::_broadcast_remote_process_exited()
 {
     const nlohmann::json msg = { {"type", "remoteProcessExited"} };
     const std::string payload = msg.dump();
-    std::vector<std::shared_ptr<ClientPeerConnection>> clients;
-    {
-        std::shared_lock<std::shared_mutex> lk(m_clients_mtx);
-        clients.reserve(m_clients.size());
-        for (const auto& kv : m_clients) clients.push_back(kv.second);
-    }
-    for (const auto& client : clients) {
-        if (!client) continue;
-        auto ch = client->get_data_channel();
+    for (const auto& id_client : m_clients) {
+        auto ch = id_client.second->get_data_channel();
         if (!ch) continue;
         try {
             ch->send(payload);
@@ -281,30 +446,44 @@ void WebRTCSocket::_stop_and_reset_stream()
     // 确保所有客户端 PeerConnection 都被关闭并清理。
     _close_all_clients();
 
-    m_media_session->stop_stream();
+    InputController::instance()->clear_mouse_target();
+
+    std::shared_ptr<Stream> local;
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        local = m_stream;
+        m_stream.reset();
+    }
+    if (local) {
+        try { local->stop(); } catch (...) {}
+    }
 }
 
 void WebRTCSocket::_stop_stream_keep_clients()
 {
     // 目标进程结束时，只通知前端退出视频页；保持 signaling 与客户端连接不被强拆。
     _broadcast_remote_process_exited();
-    for (const auto& c : _snapshot_clients()) {
-        if (c) c->release_mouse_target_binding();
+    InputController::instance()->clear_mouse_target();
+
+    std::shared_ptr<Stream> local;
+    {
+        std::scoped_lock lk(m_stream_mtx);
+        local = m_stream;
+        m_stream.reset();
     }
-    m_media_session->stop_stream();
+    if (local) {
+        try { local->stop(); } catch (...) {}
+    }
 }
 
 void WebRTCSocket::_close_all_clients()
 {
     std::vector<std::shared_ptr<ClientPeerConnection>> clients;
-    {
-        std::unique_lock<std::shared_mutex> lk(m_clients_mtx);
-        clients.reserve(m_clients.size());
-        for (auto& kv : m_clients) {
-            clients.push_back(kv.second);
-        }
-        m_clients.clear();
+    clients.reserve(m_clients.size());
+    for (auto& kv : m_clients) {
+        clients.push_back(kv.second);
     }
+    m_clients.clear();
     {
         std::scoped_lock lk(m_control_mtx);
         m_controller_id.clear();

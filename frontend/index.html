@@ -129,7 +129,7 @@
     <!-- 应用模式（?rpcWindow=1）：先显示等待文案，出画后由 JS 隐藏 -->
     <div id="rpc-window-wait" class="rpc-window-wait" hidden>
         <p class="rpc-window-wait-title">正在连接远程应用…</p>
-        <p class="rpc-window-wait-hint">请确认信令服务已启动；用 <code>http(s)</code> 打开页面时会再读取 <code>signaling_config.json</code> 覆盖 <code>signaling_config.js</code>；<code>file://</code> 仅支持编辑 <code>signaling_config.js</code>。也可用 <code>?signaling=</code> 覆盖。无视频流或信令断开时窗口将自动关闭；可按 <kbd>Esc</kbd> 退出（Electron）。</p>
+        <p class="rpc-window-wait-hint">请确认信令服务已启动，且本机可访问 WebSocket 地址（可用 URL 参数 <code>signaling=</code> 指定）。无视频流或信令断开时窗口将自动关闭；可按 <kbd>Esc</kbd> 退出（Electron）。</p>
     </div>
 
     <!-- 与 RTCPeerConnection 同文档；画面按远端窗口分辨率居中显示（四周黑边），双击黑边可浏览器全屏 -->
@@ -144,17 +144,11 @@
         </div>
     </div>
 
-    <!-- 信令配置：signaling_config.js 须先于 rpc_config.js（file:// 禁止读 JSON） -->
-    <script src="./signaling_config.js"></script>
-    <script src="./rpc_config.js"></script>
-    <script src="./rpc_random_id.js"></script>
-    <!-- 桌面：启动进程管理（须先于 desktopMode） -->
-    <script src="./desktop_process_manager.js" defer></script>
     <!-- Desktop Container：使用普通 script，支持 file:// -->
     <script src="./desktopMode.js" defer></script>
-    <!-- client.js：须在 ui/webrtc/signaling 之后执行 -->
+    <!-- client.js：支持 file:// 双击打开 -->
     <script src="./client.js" defer></script>
-    <!-- UI / WebRTC / 信令（须在 client 之前加载完毕，由 DOMContentLoaded 后启动） -->
+    <!-- 拆分后的三层入口（pass-through，会从 client.js 的内部导出绑定） -->
     <script src="./uiLayer.js" defer></script>
     <script src="./webrtcLayer.js" defer></script>
     <script src="./signalingLayer.js" defer></script>

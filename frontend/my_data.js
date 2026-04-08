@@ -2,7 +2,12 @@
     'use strict';
     var ENABLE_UPLOAD_VERBOSE_LOG = false;
 
-    var ID_CHARS_LOWER = '0123456789abcdefghijklmnopqrstuvwxyz';
+    function randomId(len) {
+        var chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+        var out = '';
+        for (var i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+        return out;
+    }
 
     function formatSize(size) {
         if (!size) return '0 B';
@@ -45,7 +50,7 @@
     }
 
     var state = {
-        clientId: 'file_' + window.__rpcRandomId(8, ID_CHARS_LOWER),
+        clientId: 'file_' + randomId(8),
         ws: null,
         pc: null,
         dc: null,
@@ -60,9 +65,11 @@
     };
 
     var dom = {
+        conn: document.getElementById('conn-state'),
         tbody: document.getElementById('tbody'),
         currentFolderName: document.getElementById('current-folder-name'),
         preview: document.getElementById('preview'),
+        meta: document.getElementById('meta'),
         logList: document.getElementById('log-list'),
         logFilter: document.getElementById('log-filter'),
         logClear: document.getElementById('log-clear'),
@@ -195,6 +202,10 @@
         log(msg, key, category || 'system');
     }
 
+    function updateConn(text) {
+        if (dom.conn) dom.conn.textContent = text;
+    }
+
     function sendDc(payload) {
         if (!state.dc || state.dc.readyState !== 'open') throw new Error('DataChannel 未连接');
         state.dc.send(JSON.stringify(payload));
@@ -303,6 +314,7 @@
                 (e.isParent || e.isDir ? '-' : formatSize(e.size)) + '</td><td>' + (e.isParent ? '-' : formatTime(e.mtime)) + '</td>';
             tr.addEventListener('click', function () {
                 state.selected = e;
+                if (dom.meta) dom.meta.textContent = JSON.stringify(e, null, 2);
                 dom.btnDownload.disabled = !!e.isDir;
                 if (!e.isDir) {
                     requestPreview(e.path).catch(function (err) {
@@ -401,7 +413,7 @@
         var chunkSize = 4 * 1024;
         var uploadLogKey = 'upload:' + file.name + ':' + file.size + ':' + file.lastModified;
         var uploadDbgKey = uploadLogKey + ':dbg';
-        var requestId = 'req_' + window.__rpcRandomId(12, ID_CHARS_LOWER);
+        var requestId = 'req_' + randomId(12);
         log('开始上传: ' + file.name, uploadLogKey, 'upload');
         verboseUploadLog('upload_init requestId=' + requestId + ' size=' + file.size + ' chunk=' + chunkSize + ' path=' + (state.currentPath || '/'), uploadDbgKey, 'system');
         setUploadProgress(file.name, 0, file.size);
@@ -491,10 +503,11 @@
         pc.ondatachannel = function (evt) {
             state.dc = evt.channel;
             state.dc.onopen = function () {
+                updateConn('DataChannel 已连接');
                 log('DataChannel 打开');
                 listCurrent().catch(function (err) { log('目录加载失败: ' + err.message); });
             };
-            state.dc.onclose = function () { log('DataChannel 已关闭'); };
+            state.dc.onclose = function () { updateConn('DataChannel 已关闭'); };
             state.dc.onmessage = function (ev) {
                 if (typeof ev.data !== 'string') return;
                 var msg = null;
@@ -534,9 +547,6 @@
     }
 
     function buildWsUrl(clientId) {
-        if (typeof window.__rpcBuildSignalingWebSocketUrl === 'function') {
-            return window.__rpcBuildSignalingWebSocketUrl(clientId);
-        }
         var params = new URLSearchParams(window.location.search);
         var signaling = params.get('signaling');
         if (signaling) {
@@ -549,16 +559,18 @@
     }
 
     function connect() {
+        updateConn('正在连接信令...');
         log('日志系统已启动，正在连接信令服务...', 'system', 'system');
         var ws = new WebSocket(buildWsUrl(state.clientId));
         state.ws = ws;
 
         ws.onopen = function () {
+            updateConn('信令已连接，等待会话...');
             log('WebSocket 已连接');
             ws.send(JSON.stringify({ id: 'server', type: 'file_request' }));
         };
-        ws.onclose = function () { log('信令已断开'); };
-        ws.onerror = function () { log('信令错误'); };
+        ws.onclose = function () { updateConn('信令已断开'); };
+        ws.onerror = function () { updateConn('信令错误'); };
         ws.onmessage = function (evt) {
             var msg = null;
             try { msg = JSON.parse(evt.data); } catch (_) { return; }
@@ -616,12 +628,5 @@
         });
     });
 
-    function startConnect() {
-        connect();
-    }
-    if (typeof window.__rpcEnsureSignalingJsonLoaded === 'function') {
-        window.__rpcEnsureSignalingJsonLoaded().then(startConnect).catch(startConnect);
-    } else {
-        startConnect();
-    }
+    connect();
 })();

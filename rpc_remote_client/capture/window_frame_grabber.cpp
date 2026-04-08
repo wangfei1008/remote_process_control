@@ -74,21 +74,17 @@ std::vector<uint8_t> WindowFrameGrabber::capture_all_windows_image(GdiCapture& g
     };
 
     std::vector<HWND> hwnds;
-    struct EnumCtx {
-        DWORD pid = 0;
-        std::vector<HWND>* out = nullptr;
-    } ctx{pid, &hwnds};
-
+    static std::vector<HWND>* s_zorder_vec = nullptr;
+    s_zorder_vec = &hwnds;
     EnumWindows([](HWND hwnd, LPARAM l_param) -> BOOL {
-        auto* c = reinterpret_cast<EnumCtx*>(l_param);
-        if (!c) return TRUE;
         DWORD win_pid = 0;
         GetWindowThreadProcessId(hwnd, &win_pid);
-        if (IsWindowVisible(hwnd) && win_pid == c->pid && c->out) {
-            c->out->push_back(hwnd);
+        if (IsWindowVisible(hwnd) && win_pid == static_cast<DWORD>(l_param) && s_zorder_vec) {
+            s_zorder_vec->push_back(hwnd);
         }
         return TRUE;
-    }, reinterpret_cast<LPARAM>(&ctx));
+    }, static_cast<LPARAM>(pid));
+    s_zorder_vec = nullptr;
 
     if (hwnds.empty()) {
         out_width = 0;

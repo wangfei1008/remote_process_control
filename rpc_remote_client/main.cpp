@@ -2,12 +2,9 @@
 #include <string>
 #include "transport/webrtc_socket.h"
 #include "common/runtime_config.h"
-#include "input/input_controller.h"
 
 int main()
 {
-    InputController::ensure_process_dpi_awareness();
-
     WebRTCSocket ws;
     const std::string signaling_ip = runtime_config::get_string("RPC_SIGNALING_IP", "127.0.0.1");
     const int signaling_port = runtime_config::get_int("RPC_SIGNALING_PORT", 9090);

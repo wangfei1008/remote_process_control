@@ -720,9 +720,19 @@
                             return;
                         }
                         if (j0 && j0.type === 'remoteProcessExited') {
-                            // 服务端在真实进程退出时已先发此消息再停采集；WebRTC 视频轨常短暂仍为 live，
-                            // 不能以此忽略，否则 Electron/桌面壳子等不会立即关视频页。
-                            i.logDataChannel && i.logDataChannel(ui, 'remoteProcessExited：关闭视频页');
+                            /* 服务端可能在主窗 HWND 瞬时失效时误发退出；轨仍 live 时忽略，改由 track ended 等关窗 */
+                            if (typeof i.rpcShellCloseAllowed === 'function' && i.rpcShellCloseAllowed(session) && session.pc) {
+                                try {
+                                    const recvs = session.pc.getReceivers();
+                                    for (let i2 = 0; i2 < recvs.length; i2++) {
+                                        const tr = recvs[i2] && recvs[i2].track;
+                                        if (tr && tr.kind === 'video' && tr.readyState === 'live') {
+                                            i.logDataChannel && i.logDataChannel(ui, '忽略 remoteProcessExited（视频轨仍为 live，可能为窗口重建误报）');
+                                            return;
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
                             i.exitVideoPageAfterRemoteStreamEnded && i.exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'remote_process_exited');
                             return;
                         }
@@ -816,6 +826,14 @@
         }
 
         return { handleOffer: handleOffer, reattachVideoToMain: reattachVideoToMain, attachStreamToMainVideo: attachStreamToMainVideo };
+    };
+
+    // pass-through: allow later layers to bind actual session controller if needed
+    window.__rpcWebRtc._bindFromInternal = window.__rpcWebRtc._bindFromInternal || function () {
+        if (!window.__rpcInternal) return;
+        if (!window.__rpcWebRtc.createWebRtcSessionController && window.__rpcInternal.createWebRtcSessionController) {
+            window.__rpcWebRtc.createWebRtcSessionController = window.__rpcInternal.createWebRtcSessionController;
+        }
     };
 })();
 

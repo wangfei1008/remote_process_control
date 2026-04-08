@@ -1,8 +1,7 @@
 /.vs
-/rpc_remote_client
+/remote_process_control/x64
 /signaling-server-qt/tmp
 /x64
 /cpp_receiver/x64
 *.log
-/remote_desktop_agent/x64
-/remote_desktop_agent/remote_d.B8C4D2E1
+/rpc_remote_client/x64/Debug

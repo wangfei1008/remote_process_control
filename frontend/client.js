@@ -1,12 +1,32 @@
 /**
- * 主入口：兼容 file:// 双击打开（非 ES Module）。
+ * 单文件构建：兼容 file:// 双击打开（Chrome 禁止 ES Module 跨文件加载）。
+ * 逻辑与 js/ 下模块版一致；开发时可继续维护 js/ 并用工具合并，或以此文件为准。
  */
 (function () {
     'use strict';
 
+    function randomId(length) {
+        const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+        const pickRandom = function () {
+            return characters.charAt(Math.floor(Math.random() * characters.length));
+        };
+        return Array.from({ length: length }, pickRandom).join('');
+    }
+
+    function createTimestampState() {
+        let startTime = null;
+        return function currentTimestamp() {
+            if (startTime === null) {
+                startTime = Date.now();
+                return 0;
+            }
+            return Date.now() - startTime;
+        };
+    }
+
     function createSession() {
         return {
-            clientId: window.__rpcRandomId(10),
+            clientId: randomId(10),
             websocket: null,
             pc: null,
             dc: null,
@@ -275,6 +295,35 @@
         }
     }
 
+    function buildSignalingWebSocketUrl(clientId) {
+        const params = new URLSearchParams(window.location.search);
+        const signaling = params.get('signaling');
+        if (signaling) {
+            const base = signaling.replace(/\/+$/, '');
+            return base + '/' + clientId;
+        }
+        const isHttps = window.location.protocol === 'https:';
+        const wsProto = isHttps ? 'wss:' : 'ws:';
+        let host = window.location.hostname;
+        if (!host && window.location.protocol === 'file:') host = '127.0.0.1';
+        if (!host) host = '127.0.0.1';
+        return wsProto + '//' + host + ':9090/' + clientId;
+    }
+
+    function keyboardEventToWindowsVk(ev) {
+        if (window.__rpcUI && typeof window.__rpcUI.keyboardEventToWindowsVk === 'function') {
+            return window.__rpcUI.keyboardEventToWindowsVk(ev);
+        }
+        return 0;
+    }
+
+    function pointerToVideoPixels(video, clientX, clientY, streamW, streamH) {
+        if (window.__rpcUI && typeof window.__rpcUI.pointerToVideoPixels === 'function') {
+            return window.__rpcUI.pointerToVideoPixels(video, clientX, clientY, streamW, streamH);
+        }
+        return null;
+    }
+
     function bindStatusElements(doc) {
         return {
             iceConnectionState: doc.getElementById('ice-connection-state'),
@@ -417,7 +466,8 @@
         this.signaling = null;
     }
 
-    /** 供 webrtcLayer / signalingLayer 使用的内部回调（session 生命周期、UI 日志等） */
+    // Export a minimal internal API for pass-through layer files.
+    // Next step will be to physically move code out of this file gradually.
     function bindLayerExports() {
         try {
             window.__rpcInternal = window.__rpcInternal || {};
@@ -439,6 +489,10 @@
             i.updateWebSocketState = updateWebSocketState;
             i.shouldDeferRpcShellCloseUntilVideo = shouldDeferRpcShellCloseUntilVideo;
             i.closeRpcShellOrWindow = closeRpcShellOrWindow;
+
+            if (window.__rpcUI && typeof window.__rpcUI._bindFromInternal === 'function') window.__rpcUI._bindFromInternal();
+            if (window.__rpcWebRtc && typeof window.__rpcWebRtc._bindFromInternal === 'function') window.__rpcWebRtc._bindFromInternal();
+            if (window.__rpcSignaling && typeof window.__rpcSignaling._bindFromInternal === 'function') window.__rpcSignaling._bindFromInternal();
         } catch (_) {}
     }
 
@@ -724,14 +778,7 @@
         if ((this.session.rpcWindowMode || this.session.electronCompactLauncher) && !deferWsWatchdog) {
             armRpcWebSocketConnectWatchdog(this.session);
         }
-        const connectSignaling = function () {
-            self.signaling.connect();
-        };
-        if (typeof window.__rpcEnsureSignalingJsonLoaded === 'function') {
-            window.__rpcEnsureSignalingJsonLoaded().then(connectSignaling).catch(connectSignaling);
-        } else {
-            connectSignaling();
-        }
+        this.signaling.connect();
     };
 
     function startDesktopMode() {
@@ -747,9 +794,12 @@
         return;
     }
 
+    
+
     function startApp() {
         if (window.__rpcAppStarted) return;
         window.__rpcAppStarted = true;
+        // Ensure layer pass-through files can bind to client.js internals.
         bindLayerExports();
         try {
             const params = new URLSearchParams(window.location.search);

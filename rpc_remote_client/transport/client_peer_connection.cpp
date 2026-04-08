@@ -3,7 +3,6 @@
 #include "input/input_controller.h"
 #include "session/remote_process_stream_source.h"
 #include <chrono>
-#include <unordered_map>
 
 
 ClientTrackData::ClientTrackData(std::shared_ptr<rtc::Track> track, std::shared_ptr<rtc::RtcpSrReporter> sender)
@@ -74,143 +73,98 @@ ClientPeerConnection::ClientPeerConnection(std::shared_ptr<rtc::PeerConnection> 
         });
 
     dc->onMessage(nullptr, [clientId, wdc = make_weak_ptr(dc), this](std::string msg) {
-        if (auto dc = wdc.lock()) {
-            _on_data_channel_message(clientId, dc, msg);
-        }
-    });
-    {
-        std::unique_lock lock(m_mutex);
-        m_data_channel = dc;
-    }
-}
+        if (auto dc = wdc.lock()) 
+        {
+            try {                
+                    // 仅处理纯文本心跳 Pong，避免误匹配文件分片 JSON/base64 内容中的 "Pong" 子串。
+                    if (msg == "Pong" || msg.rfind("Pong ", 0) == 0) {
+                        dc->send("Ping");// 仅为 Pong 响应，直接忽略					
+                        return;
+                    }
 
-ClientPeerConnection::~ClientPeerConnection()
-{
-    release_mouse_target_binding();
-}
-
-void ClientPeerConnection::release_mouse_target_binding()
-{
-    InputController::instance()->unbind_mouse_target();
-}
-
-bool ClientPeerConnection::_is_pong_message(const std::string& msg) const
-{
-    // 仅处理纯文本心跳 Pong，避免误匹配文件分片 JSON/base64 内容中的 "Pong" 子串。
-    return (msg == "Pong" || msg.rfind("Pong ", 0) == 0);
-}
-
-void ClientPeerConnection::_on_data_channel_message(const std::string& clientId, const std::shared_ptr<rtc::DataChannel>& dc, const std::string& msg)
-{
-    try {
-        if (_is_pong_message(msg)) {
-            dc->send("Ping"); // 仅为 Pong 响应，直接忽略
-            return;
-        }
-
-        auto json = nlohmann::json::parse(msg);
-        const std::string type = json.value("type", "");
-
-        if (m_file_transfer_service && m_file_transfer_service->can_handle_type(type)) {
-            // 文件传输涉及 base64 编解码 + 文件 IO，避免阻塞 DataChannel 回调线程。
-            auto payload = std::move(json);
-            m_thread_queue.dispatch([this, clientId, payload = std::move(payload), dc]() mutable {
-                if (m_file_transfer_service) {
-                    m_file_transfer_service->handle_message(clientId, payload, dc);
+                auto json = nlohmann::json::parse(msg);
+                const std::string type = json.value("type", "");
+                if (m_file_transfer_service && m_file_transfer_service->can_handle_type(type)) {
+                    m_file_transfer_service->handle_message(clientId, json, dc);
+                    return;
                 }
-            });
-            return;
-        }
+                if (type == "latPing") {
+                    const int64_t srv = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    dc->send(nlohmann::json{
+                        {"type", "latPong"},
+                        {"seq", json.value("seq", 0)},
+                        {"tCli", json.value("tCli", 0LL)},
+                        {"tSrv", srv}
+                    }.dump());
+                    return;
+                }
+                if (type == "controlRequest") {
+                    if (!m_enable_control) {
+                        dc->send(nlohmann::json({ {"type","controlDenied"} }).dump());
+                        return;
+                    }
+                    const bool ok = m_request_control_callback ? m_request_control_callback(clientId, dc) : false;
+                    if (ok) {
+                        dc->send(nlohmann::json({ {"type","controlGranted"} }).dump());
+                    } else {
+                        dc->send(nlohmann::json({ {"type","controlDenied"} }).dump());
+                    }
+                    return;
+                }
+                if (type == "controlRelease") {
+                    if (m_release_control_callback) m_release_control_callback(clientId);
+                    dc->send(nlohmann::json({ {"type","controlRevoked"} }).dump());
+                    return;
+                }
+                if (type == "requestKeyframe") {
+                    // 接收端在持续丢包/抖动后请求关键帧。
+                    // 尽力处理：强制流源将下一帧编码为 IDR。
+                    try {
+                        if (m_av_stream.has_value()) {
+                            auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(m_av_stream.value()->m_c_video);
+                            if (pm) {
+                                std::cout << "[keyframe] request_force_keyframe from client=" << clientId << std::endl;
+                                pm->request_force_keyframe();
+                            }
+                        }
+                    } catch (...) {}
+                    return;
+                }
 
-        if (type == "latPing") {
-            _handle_lat_ping(json, dc);
-            return;
-        }
-        if (type == "controlRequest") {
-            _handle_control_request(clientId, dc);
-            return;
-        }
-        if (type == "controlRelease") {
-            _handle_control_release(clientId, dc);
-            return;
-        }
-        if (type == "requestKeyframe") {
-            _handle_request_keyframe(clientId);
-            return;
-        }
+                // 忽略非控制者输入
+                if (m_is_controller_callback && !m_is_controller_callback(clientId)) {
+                    return;
+                }
 
-        // 忽略非控制者输入
-        if (m_is_controller_callback && !m_is_controller_callback(clientId)) {
-            return;
-        }
-
-        _handle_input_by_type(type, json);
-    }
-    catch (const std::exception& e) {
-        std::cerr << "JSON parse error: " << e.what() << std::endl;
-    }
-}
-
-void ClientPeerConnection::_handle_lat_ping(const nlohmann::json& json, const std::shared_ptr<rtc::DataChannel>& dc)
-{
-    const int64_t srv = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    dc->send(nlohmann::json{
-        {"type", "latPong"},
-        {"seq", json.value("seq", 0)},
-        {"tCli", json.value("tCli", 0LL)},
-        {"tSrv", srv}
-    }.dump());
-}
-
-void ClientPeerConnection::_handle_control_request(const std::string& clientId, const std::shared_ptr<rtc::DataChannel>& dc)
-{
-    if (!m_enable_control) {
-        dc->send(nlohmann::json({ {"type","controlDenied"} }).dump());
-        return;
-    }
-    const bool ok = m_request_control_callback ? m_request_control_callback(clientId, dc) : false;
-    dc->send(nlohmann::json({ {"type", ok ? "controlGranted" : "controlDenied"} }).dump());
-}
-
-void ClientPeerConnection::_handle_control_release(const std::string& clientId, const std::shared_ptr<rtc::DataChannel>& dc)
-{
-    if (m_release_control_callback) m_release_control_callback(clientId);
-    dc->send(nlohmann::json({ {"type","controlRevoked"} }).dump());
-}
-
-void ClientPeerConnection::_handle_request_keyframe(const std::string& clientId)
-{
-    // 接收端在持续丢包/抖动后请求关键帧。
-    // 将操作下沉到 ClientPeerConnection 的工作队列，避免与 on_sample/媒体线程并发读写 m_av_stream。
-    m_thread_queue.dispatch([this, clientId]() {
-        try {
-            if (m_av_stream.has_value()) {
-                auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(m_av_stream.value()->m_c_video);
-                if (pm) {
-                    std::cout << "[keyframe] request_force_keyframe from client=" << clientId << std::endl;
-                    pm->request_force_keyframe();
+                if (type == "mouseMove") {
+                    _handle_mouse_move(json);
+                }
+                else if (type == "mouseDown") {
+                    _handle_mouse_down(json);
+                }
+                else if (type == "mouseUp") {
+                    _handle_mouse_up(json);
+                }
+                else if (type == "mouseDoubleClick") {
+                    _handle_mouse_double_click(json);
+                }
+                else if (type == "mouseWheel") {
+                    _handle_mouse_wheel(json);
+                }
+                else if (type == "keyDown") {
+                    _handle_key_down(json);
+                }
+                else if (type == "keyUp") {
+                    _handle_key_up(json);
                 }
             }
-        } catch (...) {}
-    });
-}
-
-void ClientPeerConnection::_handle_input_by_type(const std::string& type, const nlohmann::json& json)
-{
-    using Handler = void (ClientPeerConnection::*)(const nlohmann::json&);
-    static const std::unordered_map<std::string, Handler> handlers = {
-        {"mouseMove", &ClientPeerConnection::_handle_mouse_move},
-        {"mouseDown", &ClientPeerConnection::_handle_mouse_down},
-        {"mouseUp", &ClientPeerConnection::_handle_mouse_up},
-        {"mouseDoubleClick", &ClientPeerConnection::_handle_mouse_double_click},
-        {"mouseWheel", &ClientPeerConnection::_handle_mouse_wheel},
-        {"keyDown", &ClientPeerConnection::_handle_key_down},
-        {"keyUp", &ClientPeerConnection::_handle_key_up},
-    };
-
-    const auto it = handlers.find(type);
-    if (it == handlers.end()) return;
-    (this->*(it->second))(json);
+            catch (const std::exception& e) {
+                std::cerr << "JSON parse error: " << e.what() << std::endl;
+            }
+        }
+        });
+    m_data_channel = dc;   
 }
 
 void ClientPeerConnection::set_state(State state)
@@ -227,21 +181,8 @@ ClientPeerConnection::State ClientPeerConnection::get_state()
 
 std::shared_ptr<rtc::DataChannel> ClientPeerConnection::get_data_channel() const
 {
-    std::shared_lock lock(m_mutex);
     if (!m_data_channel.has_value()) return nullptr;
     return m_data_channel.value();
-}
-
-std::optional<std::shared_ptr<ClientTrackData>> ClientPeerConnection::get_video_track_data() const
-{
-    std::shared_lock lock(m_mutex);
-    return m_video;
-}
-
-std::optional<std::shared_ptr<ClientTrackData>> ClientPeerConnection::get_audio_track_data() const
-{
-    std::shared_lock lock(m_mutex);
-    return m_audio;
 }
 
 void ClientPeerConnection::set_callback(create_stream_callback cb)
@@ -271,10 +212,7 @@ void ClientPeerConnection::_add_video(const uint8_t payloadType, const uint32_t 
 
     track->onOpen(onOpen);
 
-    {
-        std::unique_lock lock(m_mutex);
-        m_video = std::make_shared<ClientTrackData>(track, srReporter);
-    }
+    m_video = std::make_shared<ClientTrackData>(track, srReporter);
 }
 
 void ClientPeerConnection::_add_audio(const uint8_t payloadType, const uint32_t ssrc, const std::string cname, const std::string msid, const std::function<void(void)> onOpen)
@@ -299,10 +237,7 @@ void ClientPeerConnection::_add_audio(const uint8_t payloadType, const uint32_t 
 
     track->onOpen(onOpen);
 
-    {
-        std::unique_lock lock(m_mutex);
-        m_audio = std::make_shared<ClientTrackData>(track, srReporter);
-    }
+    m_audio = std::make_shared<ClientTrackData>(track, srReporter);
 }
 
 void ClientPeerConnection::_add_to_stream(bool is_adding_video)
@@ -317,10 +252,8 @@ void ClientPeerConnection::_add_to_stream(bool is_adding_video)
         || (get_state() == ClientPeerConnection::State::WaitingForVideo && is_adding_video)) 
     {
         // 音视频轨道已就绪
-        {
-            std::shared_lock lk(m_mutex);
-            assert(m_video.has_value() && m_audio.has_value());
-        }
+        assert(m_video.has_value() && m_audio.has_value());
+        auto video = m_video.value();
 
         set_state(ClientPeerConnection::State::Ready);
         std::cout << "[track] client=" << m_id << " state -> Ready" << std::endl;
@@ -334,14 +267,6 @@ void ClientPeerConnection::_add_to_stream(bool is_adding_video)
         _start_stream();
 }
 
-void ClientPeerConnection::_bind_mouse_target_for_stream(const std::shared_ptr<Stream>& stream)
-{
-    if (!stream) return;
-    if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(stream->m_c_video)) {
-        InputController::instance()->bind_mouse_target(pm->get_main_window());
-    }
-}
-
 void ClientPeerConnection::_start_stream()
 {
     std::cout << "[stream] _start_stream enter client=" << m_id << std::endl;
@@ -351,7 +276,6 @@ void ClientPeerConnection::_start_stream()
         if (stream->m_c_is_running) {
             // 流已在运行
             std::cout << "[stream] already running client=" << m_id << std::endl;
-            _bind_mouse_target_for_stream(stream);
             return;
         }
     }
@@ -376,7 +300,9 @@ void ClientPeerConnection::_start_stream()
         m_av_stream = stream;
     }
     std::cout << "[stream] start for client=" << m_id << std::endl;
-    _bind_mouse_target_for_stream(stream);
+    if (auto pm = std::dynamic_pointer_cast<RemoteProcessStreamSource>(stream->m_c_video)) {
+        InputController::instance()->set_mouse_target(pm->get_main_window());
+    }
     stream->start();
 }
 
