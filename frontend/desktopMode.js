@@ -6,18 +6,43 @@
 (function () {
     'use strict';
 
-    function randomId(length) {
-        const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-        const pickRandom = function () {
-            return characters.charAt(Math.floor(Math.random() * characters.length));
-        };
-        return Array.from({ length: length }, pickRandom).join('');
+    /** 与 signaling_config.js + rpc_config.js 一致，供「我的数据」等子页 URL 传参 */
+    function signalingBaseForQueryParamFromConfig() {
+        const qs = new URLSearchParams(window.location.search);
+        const fromUrl = qs.get('signaling');
+        if (fromUrl) {
+            return fromUrl.replace(/\/+$/, '');
+        }
+        const cfg = window.__rpcFrontendConfig;
+        if (!cfg) {
+            return '';
+        }
+        if (cfg.signalingBaseUrl) {
+            return String(cfg.signalingBaseUrl).replace(/\/+$/, '');
+        }
+        if (cfg.signalingHost) {
+            const isHttps = window.location.protocol === 'https:';
+            const wsProto = isHttps ? 'wss:' : 'ws:';
+            const port = cfg.signalingPort != null ? cfg.signalingPort : 9090;
+            return wsProto + '//' + cfg.signalingHost + ':' + port;
+        }
+        return '';
     }
 
     window.__rpcStartDesktopMode = function __rpcStartDesktopMode(doc) {
         if (!doc) doc = document;
         if (doc.__rpcDesktopMounted) return;
         doc.__rpcDesktopMounted = true;
+
+        if (window.location.protocol === 'file:' && !doc.__rpcFileDesktopWarned) {
+            doc.__rpcFileDesktopWarned = true;
+            console.warn(
+                '[rpc-desktop] 当前为 file:// 打开：Chrome 将每个 file 页面视为独立源，'
+                + '多窗口 iframe 可能报 “Unsafe attempt to load URL ... from frame”。'
+                + ' 建议在 frontend 目录执行: python3 -m http.server 8080，'
+                + '再使用 http://127.0.0.1:8080/ 打开。'
+            );
+        }
 
         // MVP: multi-window desktop container
         // Each remote "app window" is rendered by an iframe running rpcWindow=1.
@@ -41,6 +66,10 @@
         windowLayer.style.position = 'absolute';
         windowLayer.style.inset = '0 0 48px 0';
         windowLayer.style.background = 'transparent';
+        // 高于桌面图标层（z-index:1），否则远程窗可能被挡；开始菜单再叠在更上层。
+        windowLayer.style.zIndex = '2';
+        // 空窗层不抢点击，否则整块区域盖在桌面图标上会导致双击无效；真正的窗口再设 pointer-events:auto。
+        windowLayer.style.pointerEvents = 'none';
 
         // Desktop icons layer (like OS desktop).
         const desktopIconsLayer = doc.createElement('div');
@@ -68,6 +97,7 @@
         taskbar.style.padding = '0 10px';
         taskbar.style.gap = '10px';
         taskbar.style.overflow = 'hidden';
+        taskbar.style.zIndex = '5000';
 
         const startBtn = doc.createElement('button');
         startBtn.textContent = '开始';
@@ -102,6 +132,9 @@
         startMenu.style.boxShadow = '0 16px 50px rgba(0,0,0,0.45)';
         startMenu.style.padding = '12px';
         startMenu.style.display = 'none';
+        // 必须高于 desktopIconsLayer（z-index:1），否则「应用程序」格子在左侧会与图标层重叠，点击被吃掉。
+        startMenu.style.zIndex = '5001';
+        startMenu.style.pointerEvents = 'auto';
 
         taskbar.appendChild(startBtn);
         taskbar.appendChild(appsStrip);
@@ -147,38 +180,106 @@
             toggleStartMenu(true);
         });
 
-        // Read app shortcuts (from existing tiles).
-        const appTileEls = Array.from(doc.querySelectorAll('.app-launch-tile[data-rpc-exe]'));
-        let appDefs = appTileEls.map(function (el) {
-            const exePath = el.getAttribute('data-rpc-exe') || '';
-            const labelEl = el.querySelector('.tile-label');
-            const iconEl = el.querySelector('.tile-icon');
-            return {
-                exePath: exePath,
-                name: labelEl ? labelEl.textContent.trim() : exePath,
-                icon: iconEl ? iconEl.textContent.trim() : '',
-            };
-        }).filter(function (a) { return a.exePath; });
-        if (!appDefs.length) {
-            appDefs = [{
-                exePath: 'C:\\Windows\\System32\\notepad.exe',
-                name: '记事本',
-                icon: '📝',
-            }];
+        /** @type {Array<object>} 用户配置的启动项（不含「我的数据」） */
+        let userAppEntries = [];
+        if (window.__rpcDesktopProcessManager && typeof window.__rpcDesktopProcessManager.loadEntries === 'function') {
+            userAppEntries = window.__rpcDesktopProcessManager.loadEntries(doc);
+        } else {
+            const appTileEls = Array.from(doc.querySelectorAll('.app-launch-tile[data-rpc-exe]'));
+            userAppEntries = appTileEls.map(function (el) {
+                const exePath = el.getAttribute('data-rpc-exe') || '';
+                const labelEl = el.querySelector('.tile-label');
+                const iconEl = el.querySelector('.tile-icon');
+                return {
+                    id: 'app_legacy_' + window.__rpcRandomId(8),
+                    name: labelEl ? labelEl.textContent.trim() : exePath,
+                    icon: iconEl ? iconEl.textContent.trim() : '⬚',
+                    workPath: exePath,
+                };
+            }).filter(function (a) { return a.workPath; });
+            if (!userAppEntries.length) {
+                userAppEntries = [{
+                    id: 'app_legacy_default',
+                    name: '记事本',
+                    icon: '📝',
+                    workPath: 'C:\\Windows\\System32\\notepad.exe',
+                }];
+            }
         }
-        appDefs.unshift({
-            kind: 'my_data',
-            name: '我的数据',
-            icon: '📁',
-            launchPath: (function () {
-                const qs = new URLSearchParams(window.location.search);
-                const signaling = qs.get('signaling');
-                const p = new URLSearchParams();
-                if (signaling) p.set('signaling', signaling);
-                const suffix = p.toString();
-                return './my_data.html' + (suffix ? ('?' + suffix) : '');
-            })(),
-        });
+
+        function makeMyDataApp() {
+            return {
+                kind: 'my_data',
+                name: '我的数据',
+                icon: '📁',
+                launchPath: (function () {
+                    const base = signalingBaseForQueryParamFromConfig();
+                    const p = new URLSearchParams();
+                    if (base) p.set('signaling', base);
+                    const suffix = p.toString();
+                    return './my_data.html' + (suffix ? ('?' + suffix) : '');
+                })(),
+            };
+        }
+
+        function entryToLaunchApp(entry) {
+            const mgr = window.__rpcDesktopProcessManager;
+            const exePath = mgr && mgr.resolveExePath ? mgr.resolveExePath(entry) : (entry.exePath || entry.workPath || '');
+            return {
+                id: entry.id,
+                name: entry.name,
+                icon: entry.icon || '⬚',
+                workPath: entry.workPath,
+                executable: entry.executable,
+                exePath: exePath,
+            };
+        }
+
+        /** 完整列表：我的数据 + 用户进程 */
+        function buildAppDefs() {
+            const userPart = userAppEntries.map(entryToLaunchApp).filter(function (a) {
+                return String(a.exePath || '').trim().length > 0;
+            });
+            return [makeMyDataApp()].concat(userPart);
+        }
+
+        let appDefs = buildAppDefs();
+
+        let dpmPanelApi = null;
+
+        function openLegacyConnectionPanel() {
+            const qs = new URLSearchParams(window.location.search);
+            qs.delete('rpcWindow');
+            qs.delete('kiosk');
+            qs.delete('autostart');
+            qs.delete('exePath');
+            qs.set('rpcLegacy', '1');
+            window.location.href = window.location.pathname + '?' + qs.toString();
+        }
+
+        function applyIconToElement(box, iconValue) {
+            box.innerHTML = '';
+            const v = String(iconValue || '').trim();
+            if (!v) {
+                box.textContent = '⬚';
+                return;
+            }
+            if (/^https?:\/\//i.test(v) || /^data:image\//i.test(v)) {
+                const img = doc.createElement('img');
+                img.src = v;
+                img.alt = '';
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+                img.style.objectFit = 'contain';
+                img.onerror = function () {
+                    box.innerHTML = '';
+                    box.textContent = '⬚';
+                };
+                box.appendChild(img);
+                return;
+            }
+            box.textContent = v;
+        }
 
         function makeIframeSrc(exePath) {
             const qs = new URLSearchParams(window.location.search);
@@ -188,73 +289,74 @@
             return window.location.pathname + '?' + qs.toString();
         }
 
-        // Desktop icons (列优先：先排一列，不行再排第二列)
-        desktopIconsLayer.innerHTML = '';
         const iconCellW = 96;
         const iconCellH = 92;
         const iconStartX = 14;
         const iconStartY = 18;
-        const desktopH = (desktopIconsLayer && desktopIconsLayer.clientHeight)
-            ? desktopIconsLayer.clientHeight
-            : (window.innerHeight - 48);
-        const iconsPerCol = Math.max(1, Math.floor((desktopH - iconStartY) / iconCellH));
 
-        appDefs.forEach(function (app, idx) {
-            const col = Math.floor(idx / iconsPerCol);
-            const row = idx % iconsPerCol;
+        function renderDesktopIcons() {
+            desktopIconsLayer.innerHTML = '';
+            const desktopH = (desktopIconsLayer && desktopIconsLayer.clientHeight)
+                ? desktopIconsLayer.clientHeight
+                : (window.innerHeight - 48);
+            const iconsPerCol = Math.max(1, Math.floor((desktopH - iconStartY) / iconCellH));
 
-            const iconWrap = doc.createElement('div');
-            iconWrap.className = 'desktop-icon';
-            iconWrap.style.position = 'absolute';
-            iconWrap.style.left = String(iconStartX + col * iconCellW) + 'px';
-            iconWrap.style.top = String(iconStartY + row * iconCellH) + 'px';
-            iconWrap.style.width = '84px';
-            iconWrap.style.height = '80px';
-            iconWrap.style.display = 'flex';
-            iconWrap.style.flexDirection = 'column';
-            iconWrap.style.alignItems = 'center';
-            iconWrap.style.justifyContent = 'flex-start';
-            iconWrap.style.cursor = 'default';
-            iconWrap.style.pointerEvents = 'auto';
+            appDefs.forEach(function (app, idx) {
+                const col = Math.floor(idx / iconsPerCol);
+                const row = idx % iconsPerCol;
 
-            const iconBox = doc.createElement('div');
-            iconBox.textContent = app.icon || '⬚';
-            iconBox.style.width = '52px';
-            iconBox.style.height = '52px';
-            iconBox.style.borderRadius = '14px';
-            iconBox.style.display = 'flex';
-            iconBox.style.alignItems = 'center';
-            iconBox.style.justifyContent = 'center';
-            iconBox.style.fontSize = '28px';
-            iconBox.style.background = 'rgba(255,255,255,0.06)';
-            iconBox.style.border = '1px solid rgba(255,255,255,0.10)';
+                const iconWrap = doc.createElement('div');
+                iconWrap.className = 'desktop-icon';
+                iconWrap.style.position = 'absolute';
+                iconWrap.style.left = String(iconStartX + col * iconCellW) + 'px';
+                iconWrap.style.top = String(iconStartY + row * iconCellH) + 'px';
+                iconWrap.style.width = '84px';
+                iconWrap.style.height = '80px';
+                iconWrap.style.display = 'flex';
+                iconWrap.style.flexDirection = 'column';
+                iconWrap.style.alignItems = 'center';
+                iconWrap.style.justifyContent = 'flex-start';
+                iconWrap.style.cursor = 'default';
+                iconWrap.style.pointerEvents = 'auto';
 
-            const label = doc.createElement('div');
-            label.textContent = app.name;
-            label.style.marginTop = '6px';
-            label.style.maxWidth = '84px';
-            label.style.whiteSpace = 'nowrap';
-            label.style.overflow = 'hidden';
-            label.style.textOverflow = 'ellipsis';
-            label.style.fontSize = '12px';
-            label.style.fontWeight = '600';
-            label.style.color = '#e7eefc';
-            label.style.textShadow = '0 1px 2px rgba(0,0,0,0.35)';
+                const iconBox = doc.createElement('div');
+                iconBox.style.width = '52px';
+                iconBox.style.height = '52px';
+                iconBox.style.borderRadius = '14px';
+                iconBox.style.display = 'flex';
+                iconBox.style.alignItems = 'center';
+                iconBox.style.justifyContent = 'center';
+                iconBox.style.fontSize = '28px';
+                iconBox.style.background = 'rgba(255,255,255,0.06)';
+                iconBox.style.border = '1px solid rgba(255,255,255,0.10)';
+                applyIconToElement(iconBox, app.icon);
 
-            iconWrap.appendChild(iconBox);
-            iconWrap.appendChild(label);
-            iconWrap.title = app.exePath || app.name;
+                const label = doc.createElement('div');
+                label.textContent = app.name;
+                label.style.marginTop = '6px';
+                label.style.maxWidth = '84px';
+                label.style.whiteSpace = 'nowrap';
+                label.style.overflow = 'hidden';
+                label.style.textOverflow = 'ellipsis';
+                label.style.fontSize = '12px';
+                label.style.fontWeight = '600';
+                label.style.color = '#e7eefc';
+                label.style.textShadow = '0 1px 2px rgba(0,0,0,0.35)';
 
-            iconWrap.addEventListener('dblclick', function (e) {
-                e.stopPropagation();
-                openAppWindow(app);
+                iconWrap.appendChild(iconBox);
+                iconWrap.appendChild(label);
+                iconWrap.title = app.exePath || app.launchPath || app.name;
+
+                iconWrap.addEventListener('dblclick', function (e) {
+                    e.stopPropagation();
+                    tryLaunchAppFromShortcut(app);
+                });
+                iconWrap.addEventListener('click', function (e) { e.stopPropagation(); });
+
+                desktopIconsLayer.appendChild(iconWrap);
             });
-            iconWrap.addEventListener('click', function (e) { e.stopPropagation(); });
+        }
 
-            desktopIconsLayer.appendChild(iconWrap);
-        });
-
-        // Start menu apps.
         const menuSectionTitle = doc.createElement('div');
         menuSectionTitle.textContent = '应用程序';
         menuSectionTitle.style.color = 'rgba(231,238,252,0.85)';
@@ -270,43 +372,67 @@
         menuGrid.style.gap = '12px';
         startMenu.appendChild(menuGrid);
 
-        appDefs.forEach(function (app) {
-            const btn = doc.createElement('div');
-            btn.style.width = '92px';
-            btn.style.height = '92px';
-            btn.style.borderRadius = '18px';
-            btn.style.background = 'linear-gradient(145deg, #ffffff, #eef2ff)';
-            btn.style.border = '2px solid #d8def5';
-            btn.style.cursor = 'pointer';
-            btn.style.display = 'flex';
-            btn.style.flexDirection = 'column';
-            btn.style.alignItems = 'center';
-            btn.style.justifyContent = 'center';
-            btn.style.boxShadow = '0 4px 12px rgba(110,142,251,0.15)';
-            btn.title = app.exePath || app.name;
+        function renderStartMenuApps() {
+            menuGrid.innerHTML = '';
+            appDefs.forEach(function (app) {
+                const btn = doc.createElement('div');
+                btn.style.width = '92px';
+                btn.style.height = '92px';
+                btn.style.borderRadius = '18px';
+                btn.style.background = 'linear-gradient(145deg, #ffffff, #eef2ff)';
+                btn.style.border = '2px solid #d8def5';
+                btn.style.cursor = 'pointer';
+                btn.style.display = 'flex';
+                btn.style.flexDirection = 'column';
+                btn.style.alignItems = 'center';
+                btn.style.justifyContent = 'center';
+                btn.style.boxShadow = '0 4px 12px rgba(110,142,251,0.15)';
+                btn.title = app.exePath || app.launchPath || app.name;
 
-            const ic = doc.createElement('div');
-            ic.textContent = app.icon || '⬚';
-            ic.style.fontSize = '36px';
-            ic.style.lineHeight = '1';
-            btn.appendChild(ic);
+                const ic = doc.createElement('div');
+                ic.style.width = '44px';
+                ic.style.height = '44px';
+                ic.style.display = 'flex';
+                ic.style.alignItems = 'center';
+                ic.style.justifyContent = 'center';
+                ic.style.fontSize = '36px';
+                ic.style.lineHeight = '1';
+                applyIconToElement(ic, app.icon);
+                btn.appendChild(ic);
 
-            const lb = doc.createElement('div');
-            lb.textContent = app.name;
-            lb.style.fontSize = '12px';
-            lb.style.fontWeight = '600';
-            lb.style.marginTop = '8px';
-            lb.style.color = '#4a5568';
-            lb.style.textAlign = 'center';
-            btn.appendChild(lb);
+                const lb = doc.createElement('div');
+                lb.textContent = app.name;
+                lb.style.fontSize = '12px';
+                lb.style.fontWeight = '600';
+                lb.style.marginTop = '8px';
+                lb.style.color = '#4a5568';
+                lb.style.textAlign = 'center';
+                lb.style.maxWidth = '88px';
+                lb.style.whiteSpace = 'nowrap';
+                lb.style.overflow = 'hidden';
+                lb.style.textOverflow = 'ellipsis';
+                btn.appendChild(lb);
 
-            btn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                toggleStartMenu(true);
-                openAppWindow(app);
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    toggleStartMenu(true);
+                    tryLaunchAppFromShortcut(app);
+                });
+                menuGrid.appendChild(btn);
             });
-            menuGrid.appendChild(btn);
-        });
+        }
+
+        function refreshAppViews() {
+            appDefs = buildAppDefs();
+            renderDesktopIcons();
+            renderStartMenuApps();
+            if (dpmPanelApi && typeof dpmPanelApi.refreshList === 'function') {
+                dpmPanelApi.refreshList();
+            }
+        }
+
+        renderDesktopIcons();
+        renderStartMenuApps();
 
         const menuFooter = doc.createElement('div');
         menuFooter.style.marginTop = '14px';
@@ -318,7 +444,7 @@
 
         const btnSettings = doc.createElement('button');
         btnSettings.type = 'button';
-        btnSettings.textContent = '系统设置（经典连接面板）';
+        btnSettings.textContent = '系统设置';
         btnSettings.style.flex = '1 1 140px';
         btnSettings.style.minHeight = '36px';
         btnSettings.style.borderRadius = '10px';
@@ -346,15 +472,27 @@
         menuFooter.appendChild(btnLogout);
         startMenu.appendChild(menuFooter);
 
+        if (window.__rpcDesktopProcessManager && typeof window.__rpcDesktopProcessManager.mountPanel === 'function') {
+            dpmPanelApi = window.__rpcDesktopProcessManager.mountPanel({
+                doc: doc,
+                desktopRoot: desktopRoot,
+                getEntries: function () { return userAppEntries; },
+                setEntriesAndRefresh: function (arr) {
+                    userAppEntries = arr.slice();
+                    window.__rpcDesktopProcessManager.saveEntries(userAppEntries);
+                    refreshAppViews();
+                },
+            });
+        }
+
         btnSettings.addEventListener('click', function (e) {
             e.stopPropagation();
-            const qs = new URLSearchParams(window.location.search);
-            qs.delete('rpcWindow');
-            qs.delete('kiosk');
-            qs.delete('autostart');
-            qs.delete('exePath');
-            qs.set('rpcLegacy', '1');
-            window.location.href = window.location.pathname + '?' + qs.toString();
+            toggleStartMenu(true);
+            if (dpmPanelApi && typeof dpmPanelApi.open === 'function') {
+                dpmPanelApi.open();
+            } else {
+                openLegacyConnectionPanel();
+            }
         });
 
         // Desktop windows
@@ -403,6 +541,25 @@
             getWindowCount: function () { return windows.size; },
         };
 
+        function tryLaunchAppFromShortcut(app) {
+            if (!app) return;
+            if (app.kind === 'my_data' || app.launchPath) {
+                openAppWindow(app);
+                return;
+            }
+            const mgr = window.__rpcDesktopProcessManager;
+            const pathForRun = String(app.exePath || '').trim();
+            if (mgr && typeof mgr.isProbablyRunnablePath === 'function' && mgr.isProbablyRunnablePath(pathForRun)) {
+                openAppWindow(app);
+                return;
+            }
+            console.log(
+                '[rpc-desktop] 模拟启动进程: ' + app.name
+                + ' | 工作路径: ' + (app.workPath || '')
+                + (app.executable ? (' | 可执行: ' + app.executable) : '')
+            );
+        }
+
         function openAppWindow(app) {
             if (!app || (!app.exePath && !app.launchPath)) return;
             if (windows.size >= maxWindows) {
@@ -410,7 +567,7 @@
                 return;
             }
 
-            const winId = 'win_' + randomId(8);
+            const winId = 'win_' + window.__rpcRandomId(8);
             const idx = windows.size;
             const isMyData = app.kind === 'my_data' || (app.launchPath && app.launchPath.indexOf('my_data.html') >= 0);
             const isRpcVideoWindow = !isMyData;
@@ -433,12 +590,22 @@
             winEl.style.top = String(startTop) + 'px';
             winEl.style.width = String(defaultW) + 'px';
             winEl.style.height = String(defaultH) + 'px';
-            winEl.style.borderRadius = '12px';
-            winEl.style.overflow = 'hidden';
-            winEl.style.border = '1px solid rgba(255,255,255,0.10)';
-            winEl.style.boxShadow = '0 16px 50px rgba(0,0,0,0.45)';
-            winEl.style.background = '#000';
+            // RPC 视频窗：圆角更好看，但避免边框影响内容区尺寸（否则会出现黑边）。
+            if (isRpcVideoWindow) {
+                winEl.style.borderRadius = '12px';
+                winEl.style.overflow = 'hidden';
+                winEl.style.border = '0';
+                winEl.style.boxShadow = '0 16px 50px rgba(0,0,0,0.45)';
+                winEl.style.background = 'transparent';
+            } else {
+                winEl.style.borderRadius = '12px';
+                winEl.style.overflow = 'hidden';
+                winEl.style.border = '1px solid rgba(255,255,255,0.10)';
+                winEl.style.boxShadow = '0 16px 50px rgba(0,0,0,0.45)';
+                winEl.style.background = '#000';
+            }
             winEl.style.zIndex = String(zCounter++);
+            winEl.style.pointerEvents = 'auto';
             const titlebarHeight = isRpcVideoWindow ? 0 : 30;
 
             const titlebar = doc.createElement('div');
@@ -659,6 +826,10 @@
                 const prevW = Number(winEl.__rpc_last_fit_w || 0);
                 const prevH = Number(winEl.__rpc_last_fit_h || 0);
                 const prevTs = Number(winEl.__rpc_last_fit_ts || 0);
+                // 子页会多次 postMessage 同一分辨率（HUD/apply/videoWidth 就绪各一次），避免重复改样式与刷屏
+                if (vw === prevW && vh === prevH && prevTs > 0 && (now - prevTs) < 2500) {
+                    return;
+                }
                 const prevArea = (prevW > 0 && prevH > 0) ? (prevW * prevH) : 0;
                 const curArea = vw * vh;
                 const inStartupGuard = prevTs > 0 && (now - prevTs) < 8000;

@@ -46,6 +46,8 @@
     <ClCompile Include="source\silence_opus_source.cpp" />
     <ClCompile Include="source\stream.cpp" />
     <ClCompile Include="encode\video_encode_pipeline.cpp" />
+    <ClCompile Include="transport\media_sender.cpp" />
+    <ClCompile Include="transport\rpc_media_session.cpp" />
     <ClCompile Include="transport\webrtc_socket.cpp" />
     <ClCompile Include="capture\window_frame_grabber.cpp" />
   </ItemGroup>
@@ -80,6 +82,8 @@
     <ClInclude Include="source\stream.h" />
     <ClInclude Include="encode\video_encode_pipeline.h" />
     <ClInclude Include="capture\window_frame_grabber.h" />
+    <ClInclude Include="transport\media_sender.h" />
+    <ClInclude Include="transport\rpc_media_session.h" />
     <ClInclude Include="transport\webrtc_socket.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

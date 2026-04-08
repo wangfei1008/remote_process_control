@@ -1,0 +1,127 @@
+```mermaid
+classDiagram
+  class WebRTCSocket{
+    +start(ip,port)
+    -m_clients_mtx: shared_mutex
+    -m_clients: map
+    -m_stream: shared_ptr~Stream~
+    -m_file_transfer_service: shared_ptr~FileTransferService~
+    -_get_or_create_stream()
+  }
+
+  class ClientPeerConnection{
+    +get_state()
+    +set_state(State)
+    +get_data_channel(): shared_ptr~DataChannel~
+    +get_video_track_data(): optional~shared_ptr~ClientTrackData~~
+    +get_audio_track_data(): optional~shared_ptr~ClientTrackData~~
+    -m_video: optional~shared_ptr~ClientTrackData~~
+    -m_audio: optional~shared_ptr~ClientTrackData~~
+    -m_mutex: shared_mutex
+  }
+
+  class Stream{
+    +on_sample(handler)
+    +start()
+    +stop()
+    -send_sample()
+    -unsafe_prepare_for_sample()
+    -m_c_video: shared_ptr~StreamSource~
+    -m_c_audio: shared_ptr~StreamSource~
+    -m_sample_handler
+    -m_dispatch_queue
+  }
+
+  class StreamSource{
+    <<abstract>>
+    +start()
+    +stop()
+    +load_next_sample()
+    +get_sample_time_us()
+    +get_sample_duration_us()
+    +get_sample()
+  }
+
+  class RemoteProcessStreamSource{
+    +launch_process(exe_path): HWND
+    +request_force_keyframe()
+    +get_capture_width()
+    +get_capture_height()
+    +get_capture_telemetry()
+    +start() override
+    +stop() override
+    +load_next_sample() override
+    +get_sample() override
+    +get_sample_time_us() override
+    +get_sample_duration_us() override
+    -producer_loop()
+    -update_snapshot_from_current_state()
+    -FrameSnapshot m_snapshot
+    -atomic capture_width/height
+  }
+
+  class SilenceOpusSource{
+    +start() override
+    +stop() override
+    +load_next_sample() override
+    +get_sample() override
+    +get_sample_time_us() override
+    +get_sample_duration_us() override
+  }
+
+  class SampleOutputState{
+    +set_current(sample)
+    +advance_time(duration_us)
+    +current_sample()
+    +sample_time_us()
+    +commit_current_as_last_good()
+  }
+
+  class VideoEncodePipeline{
+    +configure(fps, ...)
+    +initialize_encoder(w,h)
+    +ensure_encoder_layout(...)
+    +encode_frame(frame, ...)
+  }
+
+  class FramePacingPolicy{
+    +reset(active_fps,idle_fps,stable_frames)
+    +update_and_get_fps(frame,width,height,recent_input)
+  }
+
+  class CaptureCoordinator{
+    +grab_rgb_frame(...): CaptureGrabOutcome
+  }
+
+  class FrameSanitizer{
+    +sanitize_frame(...)
+  }
+
+  class CaptureBackendState{
+    +configure(...)
+    +decide_use_hw_capture(now_ms)
+    +get_top_black_strip_streak()
+    +get_dxgi_instability_score()
+    +get_force_software_capture_until_unix_ms()
+    +get_last_capture_used_hw()
+  }
+
+  class EncoderLayoutPolicy
+
+  WebRTCSocket --> Stream : creates/owns
+  WebRTCSocket --> ClientPeerConnection : stores clients
+  ClientPeerConnection --> Stream : uses for media tracks
+
+  Stream "1" o-- "1" StreamSource : m_c_video / m_c_audio
+  RemoteProcessStreamSource --|> StreamSource
+  SilenceOpusSource --|> StreamSource
+
+  RemoteProcessStreamSource --> SampleOutputState
+  RemoteProcessStreamSource --> VideoEncodePipeline
+  RemoteProcessStreamSource --> FramePacingPolicy
+  RemoteProcessStreamSource --> CaptureCoordinator
+  RemoteProcessStreamSource --> FrameSanitizer
+  RemoteProcessStreamSource --> CaptureBackendState
+  VideoEncodePipeline --> EncoderLayoutPolicy
+```
+

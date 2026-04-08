@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="app">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="bootstrap">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="input">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="signaling">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="orchestration">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000005}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="media">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000006}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="webrtc">
+      <UniqueIdentifier>{A1B00001-0001-4000-8000-000000000007}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core">
+      <UniqueIdentifier>{A1B00002-0000-4000-8000-000000000010}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\capture">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000011}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\encode">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000012}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\session">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000015}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\source">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000016}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\transport">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000017}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\common">
+      <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000018}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="app\main.cpp">
+      <Filter>app</Filter>
+    </ClCompile>
+    <ClCompile Include="app\rpc_remote_application.cpp">
+      <Filter>app</Filter>
+    </ClCompile>
+    <ClCompile Include="bootstrap\runtime_settings.cpp">
+      <Filter>bootstrap</Filter>
+    </ClCompile>
+    <ClCompile Include="signaling\signaling_transport.cpp">
+      <Filter>signaling</Filter>
+    </ClCompile>
+    <ClCompile Include="orchestration\active_desktop_session.cpp">
+      <Filter>orchestration</Filter>
+    </ClCompile>
+    <ClCompile Include="orchestration\desktop_session_factory.cpp">
+      <Filter>orchestration</Filter>
+    </ClCompile>
+    <ClCompile Include="orchestration\session_director.cpp">
+      <Filter>orchestration</Filter>
+    </ClCompile>
+    <ClCompile Include="media\media_pipeline.cpp">
+      <Filter>media</Filter>
+    </ClCompile>
+    <ClCompile Include="webrtc\operator_channel.cpp">
+      <Filter>webrtc</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\dxgi_capture.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\gdi_capture.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\capture_backend_state.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\capture_coordinator.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\frame_sanitizer.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\window_frame_grabber.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp">
+      <Filter>rpc_core\encode</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\encode\h264_encoder.cpp">
+      <Filter>rpc_core\encode</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp">
+      <Filter>rpc_core\encode</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp">
+      <Filter>rpc_core\encode</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\process_lifecycle.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\remote_process_session.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\window_selection_diagnostics.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\window_selection_utils.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\session_health_policy.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\remote_desktop_media_session.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\remote_video_engine.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\source\silence_opus_generator.cpp">
+      <Filter>rpc_core\source</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\transport\client_peer_connection.cpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\transport\dispatch_queue.cpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\transport\remote_file_transfer_controller.cpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\transport\remote_file_store_repository.cpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClCompile>
+    <ClCompile Include="input\input_controller.cpp">
+      <Filter>input</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="app\rpc_remote_application.h">
+      <Filter>app</Filter>
+    </ClInclude>
+    <ClInclude Include="bootstrap\runtime_settings.h">
+      <Filter>bootstrap</Filter>
+    </ClInclude>
+    <ClInclude Include="signaling\signaling_event.h">
+      <Filter>signaling</Filter>
+    </ClInclude>
+    <ClInclude Include="signaling\signaling_observer.h">
+      <Filter>signaling</Filter>
+    </ClInclude>
+    <ClInclude Include="signaling\signaling_transport.h">
+      <Filter>signaling</Filter>
+    </ClInclude>
+    <ClInclude Include="orchestration\session_replace_policy.h">
+      <Filter>orchestration</Filter>
+    </ClInclude>
+    <ClInclude Include="orchestration\desktop_session_factory.h">
+      <Filter>orchestration</Filter>
+    </ClInclude>
+    <ClInclude Include="orchestration\active_desktop_session.h">
+      <Filter>orchestration</Filter>
+    </ClInclude>
+    <ClInclude Include="orchestration\session_director.h">
+      <Filter>orchestration</Filter>
+    </ClInclude>
+    <ClInclude Include="media\media_pipeline.h">
+      <Filter>media</Filter>
+    </ClInclude>
+    <ClInclude Include="webrtc\operator_channel.h">
+      <Filter>webrtc</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\bmp_dump_writer.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_backend_state.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_coordinator.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_discard_policy.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\dxgi_capture.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\frame_sanitizer.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\gdi_capture.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\window_frame_grabber.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\common\rpc_time.h">
+      <Filter>rpc_core\common</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\common\window_rect_utils.h">
+      <Filter>rpc_core\common</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\encode\encoder_layout_policy.h">
+      <Filter>rpc_core\encode</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\encode\h264_avcc_utils.h">
+      <Filter>rpc_core\encode</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\encode\h264_encoder.hpp">
+      <Filter>rpc_core\encode</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\encode\video_encode_pipeline.h">
+      <Filter>rpc_core\encode</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\process_lifecycle.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_process_session.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\session_health_policy.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_desktop_media_session.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_video_engine.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_capture_telemetry.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\window_selection_diagnostics.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\window_selection_utils.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\source\silence_opus_generator.h">
+      <Filter>rpc_core\source</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\transport\client_peer_connection.h">
+      <Filter>rpc_core\transport</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\transport\dispatch_queue.hpp">
+      <Filter>rpc_core\transport</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\transport\remote_file_transfer_controller.h">
+      <Filter>rpc_core\transport</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\transport\remote_file_store_repository.h">
+      <Filter>rpc_core\transport</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\transport\remote_desktop_media_sender.h">
+      <Filter>rpc_core\transport</Filter>
+    </ClInclude>
+    <ClInclude Include="input\input_controller.h">
+      <Filter>input</Filter>
+    </ClInclude>
+    <ClInclude Include="app\runtime_config.h">
+      <Filter>app</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

@@ -4,6 +4,7 @@
 #endif
 #include <windows.h> // 用于 SendInput
 #include <cstdint>
+#include <mutex>
 
 class InputController 
 {
@@ -15,11 +16,12 @@ public:
     static InputController* instance();
     void simulate_mouse_move(int x, int y);
 	void simulate_mouse_move(int x, int y, int abs_x, int abs_y, int video_width, int video_height);
-    // 设置鼠标聚焦与坐标映射使用的主窗口目标。 
-    void set_mouse_target(HWND hwnd);
+    // 绑定主窗口目标；返回 bind_id，解绑时传入同一 id（仅当仍为当前有效绑定时才会清除）。
+    void bind_mouse_target(HWND hwnd);
+    void unbind_mouse_target();
     //设置远程进程采集管线输出的合并采集矩形。
     void set_capture_screen_rect(int left, int top, int width, int height);
-    void clear_mouse_target();
+
 	// 参数 absX、absY：流媒体视频空间中的绝对坐标。
 	// 参数 videoWidth、videoHeight：当前视频流分辨率。
     void simulate_mouse_down(int button, int x, int y); // button：0=左键，1=右键，2=中键

@@ -7,6 +7,9 @@
     window.__rpcSignaling = window.__rpcSignaling || {};
 
     function buildSignalingWebSocketUrl(clientId) {
+        if (typeof window.__rpcBuildSignalingWebSocketUrl === 'function') {
+            return window.__rpcBuildSignalingWebSocketUrl(clientId);
+        }
         const params = new URLSearchParams(window.location.search);
         const signaling = params.get('signaling');
         if (signaling) {

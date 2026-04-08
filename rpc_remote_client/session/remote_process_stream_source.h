@@ -11,11 +11,31 @@
 #include "capture/capture_backend_state.h"
 #include "encode/video_encode_pipeline.h"
 #include "session/sample_output_state.h"
+#include "policy/frame_pacing_policy.h"
 #include <chrono>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
 
 class RemoteProcessStreamSource : public StreamSource
 {
 public:
+    // 一次性快照遥测（线程安全）。
+    // 用于 WebRTC 发送端在同一帧里构造 frameMark / captureHealth，避免多次 getter 分别加锁导致字段不一致。
+    struct CaptureTelemetry {
+        uint32_t last_capture_ms = 0;
+        uint32_t last_encode_ms = 0;
+        uint64_t last_frame_unix_ms = 0;
+
+        bool last_capture_used_hw = false;
+        bool dxgi_disabled_for_session = false;
+        int top_black_strip_streak = 0;
+        int dxgi_instability_score = 0;
+
+        uint64_t force_software_capture_until_unix_ms = 0;
+    };
+
     RemoteProcessStreamSource();
     ~RemoteProcessStreamSource();
     HWND launch_process(const std::string& exe_path);
@@ -35,31 +55,60 @@ public:
 
     HWND get_main_window() const { return m_mainWindow; }
     //当前编码器实例使用的采集帧宽高。
-    int get_capture_width() const { return m_width; }
-    int get_capture_height() const { return m_height; }
+    int get_capture_width() const { return m_capture_width_atomic.load(std::memory_order_relaxed); }
+    int get_capture_height() const { return m_capture_height_atomic.load(std::memory_order_relaxed); }
     //最近一次采集耗时（毫秒）
-    uint32_t get_last_capture_ms() const { return m_last_capture_ms; }
+    uint32_t get_last_capture_ms() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.last_capture_ms;
+    }
     //最近一次 H.264 编码耗时（毫秒）
-    uint32_t get_last_encode_ms() const { return m_last_encode_ms; }
+    uint32_t get_last_encode_ms() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.last_encode_ms;
+    }
     //最近产生视频帧的 Unix 时间戳（毫秒）
-    uint64_t get_last_frame_unix_ms() const { return m_last_frame_unix_ms; }
+    uint64_t get_last_frame_unix_ms() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.last_frame_unix_ms;
+    }
     //最近一次采集是否使用了 DXGI 硬件复制
-    bool get_last_capture_used_hw() const { return m_capture_backend_state.get_last_capture_used_hw(); }
+    bool get_last_capture_used_hw() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.last_capture_used_hw;
+    }
     //当前会话是否因重复异常而禁用 DXGI
-    bool is_dxgi_disabled_for_session() const { return m_capture_backend_state.is_dxgi_disabled_for_session(); }
+    bool is_dxgi_disabled_for_session() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.dxgi_disabled_for_session;
+    }
     //顶部黑条异常模式的当前连续命中次数
-    int get_top_black_strip_streak() const { return m_capture_backend_state.get_top_black_strip_streak(); }
+    int get_top_black_strip_streak() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.top_black_strip_streak;
+    }
     //会话级 DXGI 不稳定分数（越高表示失败越频繁）
-    int get_dxgi_instability_score() const { return m_capture_backend_state.get_dxgi_instability_score(); }
+    int get_dxgi_instability_score() const {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.dxgi_instability_score;
+    }
     //强制软件采集截止到的 Unix 毫秒时间；0 表示未强制
     uint64_t get_force_software_capture_until_unix_ms() const {
-        return m_capture_backend_state.get_force_software_capture_until_unix_ms();
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        return m_snapshot.force_software_capture_until_unix_ms;
     }
+
+    // 一次性获取遥测快照，减少多 getter 分别加锁。
+    CaptureTelemetry get_capture_telemetry() const;
 
     //设置远程进程/窗口退出通知回调。
     void set_on_remote_exit(std::function<void()> cb) { m_on_remote_exit = std::move(cb); }
 
 private:
+    // 生产者-消费者：由后台线程生产“下一条样本”，
+    // Stream 调用 load_next_sample() 时只做等待/接收。
+    void producer_loop();
+
     void notify_remote_exit();
     //检查进程退出与 HWND 有效性；返回 false 表示采集前停止
     bool tick_window_and_health(std::chrono::steady_clock::time_point& last_no_window_diag);
@@ -80,6 +129,21 @@ private:
                              std::chrono::steady_clock::time_point t_cap_begin,
                              std::chrono::steady_clock::time_point t_after_cap, bool applied_layout);
 
+    void update_snapshot_from_current_state();
+
+    struct FrameSnapshot {
+        int capture_width = 0;
+        int capture_height = 0;
+        uint32_t last_capture_ms = 0;
+        uint32_t last_encode_ms = 0;
+        uint64_t last_frame_unix_ms = 0;
+        bool last_capture_used_hw = false;
+        bool dxgi_disabled_for_session = false;
+        int top_black_strip_streak = 0;
+        int dxgi_instability_score = 0;
+        uint64_t force_software_capture_until_unix_ms = 0;
+    };
+
     PROCESS_INFORMATION m_pi;
     DWORD m_launchPid = 0;   // CreateProcess 返回的 PID
     DWORD m_capturePid = 0;  // 实际拥有被采集窗口的 PID
@@ -90,6 +154,8 @@ private:
     int m_fps;
     int m_active_fps = 30;
     int m_idle_fps = 15;
+    int m_idle_enter_stable_frames = 24;
+    uint32_t m_recent_input_window_ms = 300;
     bool m_capture_all_windows = false;
     bool m_hw_capture_supported = false;
     bool m_hw_capture_requested = false;
@@ -102,6 +168,14 @@ private:
     uint32_t m_pid_rebind_startup_window_ms = 120000;
     uint32_t m_window_missing_exit_grace_ms = 5000;
     bool m_running = false;
+
+    std::thread m_producer_thread;
+    std::mutex m_producer_mtx;
+    std::condition_variable m_producer_cv;
+    // Stream 请求下一条样本时设置 m_need_produce=true，
+    // 后台生产完置 m_has_produced=true 并唤醒等待方。
+    bool m_need_produce = false;
+    bool m_has_produced = false;
     GdiCapture m_gdiCapture; // GDI 窗口图像采集后端。
     DXGICapture m_dxgiCapture;
     SampleOutputState m_sample_output_state;
@@ -110,10 +184,6 @@ private:
     int m_last_good_rgb_w = 0;
     int m_last_good_rgb_h = 0;
     uint32_t m_capture_degrade_ms = 2500;
-
-    uint32_t m_last_capture_ms = 0;
-    uint32_t m_last_encode_ms = 0;
-    uint64_t m_last_frame_unix_ms = 0;
     // 首帧前连续空帧计数；达到阈值时强制重选窗口，避免卡在不可采集句柄。
     uint32_t m_pre_video_empty_frame_streak = 0;
     uint32_t m_pre_video_reselect_empty_threshold = 30;
@@ -126,4 +196,13 @@ private:
     RemoteProcessSession m_remote_process_session;
     CaptureBackendState m_capture_backend_state;
     VideoEncodePipeline m_video_encode_pipeline;
+    // 根据输入活跃度与帧变化情况动态调整采样帧率（降低空闲抖动与码率开销）。
+    FramePacingPolicy m_frame_pacing_policy;
+
+    FrameSnapshot m_snapshot;
+    mutable std::mutex m_snapshot_mtx;
+
+    // 为了避免在 on_sample 高频路径反复加锁：采集分辨率用原子读写。
+    std::atomic<int> m_capture_width_atomic{0};
+    std::atomic<int> m_capture_height_atomic{0};
 };
