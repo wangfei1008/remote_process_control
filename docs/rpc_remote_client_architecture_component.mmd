@@ -1,0 +1,35 @@
+```mermaid
+flowchart LR
+  main([rpc_remote_client/main.cpp<br/>main()]) --> ws[WebRTCSocket]
+  ws --> initSig[WebRTCSocket::_init_signaling()]
+  ws --> pcMgr[WebRTCSocket maintains clients:<br/>Map&lt;clientId, ClientPeerConnection&gt;]
+  ws -->|create/retain stream| stream[Stream(Video: RemoteProcessStreamSource,<br/>Audio: SilenceOpusSource)]
+
+  stream --> videoSrc[RemoteProcessStreamSource]
+  stream --> audioSrc[SilenceOpusSource]
+
+  videoSrc --> producer[producer_loop() produces next media sample]
+  producer --> cap[CaptureCoordinator::grab_rgb_frame()]
+  cap --> gdi[GdiCapture]
+  cap --> dxgi[DXGICapture]
+  cap --> capState[CaptureBackendState]
+
+  producer --> sanitize[FrameSanitizer::sanitize_frame()]
+  producer --> pacing[FramePacingPolicy::update_and_get_fps()]
+  producer --> encode[VideoEncodePipeline::encode_frame()]
+  encode --> layout[EncoderLayoutPolicy]
+  producer --> outState[SampleOutputState<br/>current_sample + timestamps]
+
+  stream -->|on_sample callback| sender[WebRTCSocket::on_sample]
+  sender --> tracks[ClientPeerConnection Track(s)<br/>track->sendFrame(RTP)]
+
+  ws --> inputs[InputController<br/>simulate mouse/keyboard]
+  ws --> fileXfer[FileTransferService<br/>file chunk transfer]
+
+  ws --> controlChan[DataChannel(JSON)<br/>frameMark / captureHealth / input / file transfer]
+  sender --> rtc[(WebRTC: PeerConnection / Track / DataChannel)]
+  pcMgr --> pc[ClientPeerConnection<br/>dispatches DataChannel messages]
+  pc -->|input control| inputs
+  pc -->|media send| tracks
+```
+

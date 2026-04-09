@@ -134,13 +134,17 @@ void Stream::send_sample() {
         usleep(waitTime);
     }
 
+    // 不要在持锁期间执行 handler / load_next_sample：
+    // 否则 stop() 与发送链路会互相阻塞，导致抖动甚至退出迟滞。
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_c_is_running) return;
-        auto sample = ss->get_sample();
-        m_sample_handler(sst, ss->get_sample_time_us(), sample);
-        ss->load_next_sample();
     }
+
+    const auto sampleTime = ss->get_sample_time_us();
+    auto sample = ss->get_sample();
+    m_sample_handler(sst, sampleTime, sample);
+    ss->load_next_sample();
 
     m_dispatch_queue.dispatch([this]() { this->send_sample(); });
 }

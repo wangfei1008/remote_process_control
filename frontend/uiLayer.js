@@ -75,15 +75,29 @@
         const vArea = (vw > 0 && vh > 0) ? (vw * vh) : 0;
         const fArea = (fw > 0 && fh > 0) ? (fw * fh) : 0;
 
-        // 后端通过 DataChannel 主动上报分辨率变化时，优先使用该值，
-        // 避免浏览器 videoWidth/videoHeight 仍停留旧值导致 UI 尺寸不刷新。
-        // 但如果浏览器已经解码出更大的稳定分辨率，且 forced 显著更小（常见于启动条/工具窗瞬时误报），
-        // 则优先使用 videoWidth/videoHeight，避免 UI 被瞬时降级回小分辨率。
-        if (vArea > 0 && fArea > 0 && vArea >= (fArea * 2)) {
+        // 后端通过 DataChannel 主动上报分辨率变化时，forced 可能先到，而浏览器解码尺寸（videoWidth/Height）
+        // 会滞后到下一次带 SPS/PPS 的关键帧；在此期间若强行按 forced 去调整窗口/舞台，会制造黑边。
+        // 因此：只要浏览器已经解码出有效分辨率，就以 videoWidth/videoHeight 为准；forced 主要用于“尚未解码首帧”阶段。
+        if (vw > 0 && vh > 0) {
+            if (fw > 0 && fh > 0) {
+                const varV = vw / Math.max(1, vh);
+                const varF = fw / Math.max(1, fh);
+                const aspectDrift = Math.abs(varV - varF) / Math.max(varV, varF);
+                // 宽高比偏差明显：优先信任浏览器真实解码尺寸，避免按 forced 造成 letterbox。
+                if (aspectDrift >= 0.03) {
+                    return { w: vw, h: vh };
+                }
+                // 面积偏差明显：同样优先信任真实解码尺寸。
+                if (vArea > 0 && fArea > 0) {
+                    const areaDrift = Math.abs(vArea - fArea) / Math.max(vArea, fArea);
+                    if (areaDrift >= 0.10) {
+                        return { w: vw, h: vh };
+                    }
+                }
+            }
             return { w: vw, h: vh };
         }
         if (fw > 0 && fh > 0) return { w: fw, h: fh };
-        if (vw > 0 && vh > 0) return { w: vw, h: vh };
         if (sw > 0 && sh > 0) return { w: sw, h: sh };
         return { w: 0, h: 0 };
     }
@@ -147,9 +161,30 @@
         });
         const doc = video.ownerDocument;
         const compact = doc && doc.documentElement.classList.contains('rpc-window-mode');
-        /* 应用/全屏模式 HUD 已藏，不必留过大边距，否则易被误认为「画面不全」 */
-        const marginX = compact ? 16 : 40;
-        const marginY = compact ? 20 : 100;
+
+        // rpcWindow=1（DesktopMode 的 iframe 窗口）：父容器已按后端分辨率调整宽高比，
+        // 这里不再引入“边距”缩放，否则会在四周留下黑边。
+        if (compact) {
+            const stage = getVideoStage(doc);
+            if (stage) {
+                stage.style.inset = '0';
+                stage.style.left = '0';
+                stage.style.top = '0';
+                stage.style.right = '0';
+                stage.style.bottom = '0';
+                stage.style.width = '100%';
+                stage.style.height = '100%';
+                stage.style.padding = '0';
+                stage.style.background = 'transparent';
+            }
+            video.style.width = '100%';
+            video.style.height = '100%';
+            return;
+        }
+
+        /* 普通页面：HUD 可见，留出边距避免遮挡 */
+        const marginX = 40;
+        const marginY = 100;
         const maxW = Math.max(160, window.innerWidth - marginX);
         const maxH = Math.max(120, window.innerHeight - marginY);
         let dw = iw;
@@ -164,14 +199,41 @@
             dw = Math.round(dw * s);
             dh = Math.round(dh * s);
         }
-        // Fix video element size to reduce layout thrashing.
-        // We let CSS `object-fit: contain` handle letterboxing stably.
-        // Pointer mapping still uses actual boundingClientRect size.
-        if (!video.__rpc_fill_fixed) {
-            video.style.width = '100%';
-            video.style.height = '100%';
-            video.__rpc_fill_fixed = true;
+        // 方案 A：让“舞台容器”跟随视频宽高比（不裁剪、不变形、尽量不出现 letterbox）。
+        // 说明：普通浏览器页无法强制改变“窗口”宽高比，但可以让舞台本身缩到内容尺寸并居中显示；
+        // DesktopMode / Electron 外壳则可以进一步配合父容器 resize 达到真正“无边”。
+        const stage = getVideoStage(doc);
+        const hud = doc ? doc.getElementById('video-stage-hud') : null;
+        const isStageFullscreen = !!(doc && stage && (doc.fullscreenElement === stage || doc.webkitFullscreenElement === stage));
+
+        // 视频元素：固定为计算后的显示尺寸。
+        video.style.width = String(Math.max(1, dw)) + 'px';
+        video.style.height = String(Math.max(1, dh)) + 'px';
+
+        if (!stage || isStageFullscreen) {
+            return;
         }
+
+        // 舞台：缩到“视频 + HUD”的包裹尺寸并居中，避免上下黑条来自“全屏黑底容器 + contain”。
+        let hudH = 0;
+        try {
+            // rpc-window-mode 下 HUD 被 CSS 隐藏，此处自然得到 0。
+            if (hud && !hud.hidden) hudH = Math.ceil(hud.getBoundingClientRect().height || 0);
+        } catch (_) {}
+        const stageW = Math.max(1, dw);
+        const stageH = Math.max(1, dh + hudH);
+        const left = Math.max(0, Math.floor((window.innerWidth - stageW) / 2));
+        const top = Math.max(0, Math.floor((window.innerHeight - stageH) / 2));
+
+        stage.style.inset = 'auto';
+        stage.style.left = String(left) + 'px';
+        stage.style.top = String(top) + 'px';
+        stage.style.right = 'auto';
+        stage.style.bottom = 'auto';
+        stage.style.width = String(stageW) + 'px';
+        stage.style.height = String(stageH) + 'px';
+        stage.style.padding = '0';
+        stage.style.background = 'transparent';
     }
 
     function tryEnterStageFullscreen(doc) {
@@ -413,8 +475,5 @@
     window.__rpcUI.setupStageMouse = setupStageMouse;
     window.__rpcUI.setupKeyboardOnStage = setupKeyboardOnStage;
     window.__rpcUI.setupRemoteControl = setupRemoteControl;
-
-    // Backward compatibility for bindLayerExports().
-    window.__rpcUI._bindFromInternal = window.__rpcUI._bindFromInternal || function () {};
 })();
 

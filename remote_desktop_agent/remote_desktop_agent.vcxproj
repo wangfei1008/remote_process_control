@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Agent：应用、信令、编排（单一媒体会话 / 新请求替换） -->
+    <ClCompile Include="app\main.cpp" />
+    <ClCompile Include="app\rpc_remote_application.cpp" />
+    <ClCompile Include="bootstrap\runtime_settings.cpp" />
+    <ClCompile Include="input\input_controller.cpp" />
+    <ClCompile Include="signaling\signaling_transport.cpp" />
+    <ClCompile Include="orchestration\active_desktop_session.cpp" />
+    <ClCompile Include="orchestration\desktop_session_factory.cpp" />
+    <ClCompile Include="orchestration\session_director.cpp" />
+    <ClCompile Include="media\media_pipeline.cpp" />
+    <ClCompile Include="webrtc\operator_channel.cpp" />
+    <!-- rpc_core：远程进程 / 采集 / 编码 / 传输（自包含副本，不引用 ..\rpc_remote_client） -->
+    <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp" />
+    <ClCompile Include="rpc_core\capture\dxgi_capture.cpp" />
+    <ClCompile Include="rpc_core\capture\gdi_capture.cpp" />
+    <ClCompile Include="rpc_core\transport\client_peer_connection.cpp" />
+    <ClCompile Include="rpc_core\capture\capture_backend_state.cpp" />
+    <ClCompile Include="rpc_core\capture\capture_coordinator.cpp" />
+    <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp" />
+    <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
+    <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
+    <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp" />
+    <ClCompile Include="rpc_core\capture\frame_sanitizer.cpp" />
+    <ClCompile Include="rpc_core\encode\h264_encoder.cpp" />
+    <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp" />
+    <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
+    <ClCompile Include="rpc_core\session\process_lifecycle.cpp" />
+    <ClCompile Include="rpc_core\session\remote_process_session.cpp" />
+    <ClCompile Include="rpc_core\session\window_selection_diagnostics.cpp" />
+    <ClCompile Include="rpc_core\session\window_selection_utils.cpp" />
+    <ClCompile Include="rpc_core\session\session_health_policy.cpp" />
+    <ClCompile Include="rpc_core\session\remote_video_engine.cpp" />
+    <ClCompile Include="rpc_core\source\silence_opus_generator.cpp" />
+    <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp" />
+    <ClCompile Include="rpc_core\capture\window_frame_grabber.cpp" />
+    <ClCompile Include="rpc_core\transport\remote_file_transfer_controller.cpp" />
+    <ClCompile Include="rpc_core\transport\remote_file_store_repository.cpp" />
+    <ClCompile Include="rpc_core\session\remote_desktop_media_session.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="app\rpc_remote_application.h" />
+    <ClInclude Include="app\runtime_config.h" />
+    <ClInclude Include="bootstrap\runtime_settings.h" />
+    <ClInclude Include="input\input_controller.h" />
+    <ClInclude Include="signaling\signaling_event.h" />
+    <ClInclude Include="signaling\signaling_observer.h" />
+    <ClInclude Include="signaling\signaling_transport.h" />
+    <ClInclude Include="orchestration\session_replace_policy.h" />
+    <ClInclude Include="orchestration\desktop_session_factory.h" />
+    <ClInclude Include="orchestration\active_desktop_session.h" />
+    <ClInclude Include="orchestration\session_director.h" />
+    <ClInclude Include="media\media_pipeline.h" />
+    <ClInclude Include="webrtc\operator_channel.h" />
+    <ClInclude Include="rpc_core\capture\bmp_dump_writer.h" />
+    <ClInclude Include="rpc_core\capture\capture_backend_state.h" />
+    <ClInclude Include="rpc_core\capture\capture_coordinator.h" />
+    <ClInclude Include="rpc_core\capture\capture_discard_policy.h" />
+    <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
+    <ClInclude Include="rpc_core\capture\dxgi_capture.h" />
+    <ClInclude Include="rpc_core\capture\frame_sanitizer.h" />
+    <ClInclude Include="rpc_core\capture\gdi_capture.h" />
+    <ClInclude Include="rpc_core\capture\window_frame_grabber.h" />
+    <ClInclude Include="rpc_core\common\rpc_time.h" />
+    <ClInclude Include="rpc_core\common\window_rect_utils.h" />
+    <ClInclude Include="rpc_core\encode\encoder_layout_policy.h" />
+    <ClInclude Include="rpc_core\encode\h264_avcc_utils.h" />
+    <ClInclude Include="rpc_core\encode\h264_encoder.hpp" />
+    <ClInclude Include="rpc_core\encode\video_encode_pipeline.h" />
+    <ClInclude Include="rpc_core\session\process_lifecycle.h" />
+    <ClInclude Include="rpc_core\session\remote_process_session.h" />
+    <ClInclude Include="rpc_core\session\session_health_policy.h" />
+    <ClInclude Include="rpc_core\session\remote_video_engine.h" />
+    <ClInclude Include="rpc_core\session\remote_capture_telemetry.h" />
+    <ClInclude Include="rpc_core\session\window_selection_diagnostics.h" />
+    <ClInclude Include="rpc_core\session\window_selection_utils.h" />
+    <ClInclude Include="rpc_core\source\silence_opus_generator.h" />
+    <ClInclude Include="rpc_core\transport\client_peer_connection.h" />
+    <ClInclude Include="rpc_core\transport\dispatch_queue.hpp" />
+    <ClInclude Include="rpc_core\transport\remote_desktop_media_sender.h" />
+    <ClInclude Include="rpc_core\transport\remote_file_transfer_controller.h" />
+    <ClInclude Include="rpc_core\transport\remote_file_store_repository.h" />
+    <ClInclude Include="rpc_core\session\remote_desktop_media_session.h" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{B8C4D2E1-5F3A-4C7B-9D0E-1A2B3C4D5E6F}</ProjectGuid>
+    <RootNamespace>remote_desktop_agent</RootNamespace>
+    <TargetName>remote_desktop_agent</TargetName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>NotSet</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Debug;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)rpc_core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>ws2_32.lib;d3d11.lib;dxgi.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;datachannel.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)rpc_core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;datachannel.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

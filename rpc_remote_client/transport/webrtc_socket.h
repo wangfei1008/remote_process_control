@@ -3,21 +3,26 @@
 #include <rtc/rtc.hpp>
 #include <memory>
 #include <string>
+#include <vector>
 #include <cstdint>
 #include "nlohmann/json.hpp"
 #include "transport/dispatch_queue.hpp"
 #include "transport/client_peer_connection.h"
-#include "transport/file_transfer_service.h"
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
 
 #define LOGINFO(...) 
 #define LOGERROR(...)
+
+class Stream;
+class RpcMediaSession;
 
 class WebRTCSocket
 {
 public:
 	WebRTCSocket();
+    ~WebRTCSocket();
     void start(const std::string& ip, int port);
 private:
 	void _init_signaling();
@@ -31,6 +36,7 @@ private:
 	void _release_control(const std::string& clientId);
 	bool _is_controller(const std::string& clientId);
     void _broadcast_remote_process_exited();
+    std::vector<std::shared_ptr<ClientPeerConnection>> _snapshot_clients() const;
 private:
     std::shared_ptr<rtc::WebSocket> m_ws;
     std::string m_signaling_ip;
@@ -38,21 +44,15 @@ private:
 	int m_signaling_port;
     std::string m_stun_server;
     std::string m_signaling_local_id;
-    uint64_t m_frame_mark_interval = 10;
-    uint64_t m_capture_health_interval = 30;
 	DispatchQueue m_thread_queue; // WebRTC 操作使用单线程队列
 
 	std::unordered_map<std::string, std::shared_ptr<ClientPeerConnection>> m_clients;
+    mutable std::shared_mutex m_clients_mtx;
 	rtc::Configuration m_config;
-
-	// 共享的流与进程对象
-	std::shared_ptr<Stream> m_stream;
-	std::mutex m_stream_mtx;
-	std::string m_exe_path;
 
 	// 并发控制权限限制
 	std::mutex m_control_mtx;
 	std::string m_controller_id;
-    std::shared_ptr<FileTransferService> m_file_transfer_service;
+    std::unique_ptr<RpcMediaSession> m_media_session;
 };
 

@@ -36,6 +36,13 @@ RemoteProcessStreamSource::RemoteProcessStreamSource()
     if (m_idle_fps > m_active_fps) m_idle_fps = m_active_fps;
     m_fps = m_active_fps;
 
+    // 帧率节流的输入活跃窗口与稳定帧阈值（用于更平滑地进入 idle_fps）。
+    m_idle_enter_stable_frames = static_cast<int>((std::max)(1,
+        runtime_config::get_int("RPC_IDLE_ENTER_STABLE_FRAMES", m_idle_enter_stable_frames)));
+    m_recent_input_window_ms = static_cast<uint32_t>((std::max)(1,
+        runtime_config::get_int("RPC_RECENT_INPUT_WINDOW_MS", static_cast<int>(m_recent_input_window_ms))));
+    m_frame_pacing_policy.reset(m_active_fps, m_idle_fps, m_idle_enter_stable_frames);
+
     m_hw_capture_supported = (rpc_probe_dxgi_capture_support() && m_dxgiCapture.is_available());
     {
         // 采集后端仅支持两种模式：dxgi / gdi。
@@ -88,9 +95,25 @@ RemoteProcessStreamSource::RemoteProcessStreamSource()
     m_video_encode_pipeline.configure(m_fps, 8, 5);
 }
 
+RemoteProcessStreamSource::CaptureTelemetry RemoteProcessStreamSource::get_capture_telemetry() const
+{
+    std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+    CaptureTelemetry t;
+    t.last_capture_ms = m_snapshot.last_capture_ms;
+    t.last_encode_ms = m_snapshot.last_encode_ms;
+    t.last_frame_unix_ms = m_snapshot.last_frame_unix_ms;
+
+    t.last_capture_used_hw = m_snapshot.last_capture_used_hw;
+    t.dxgi_disabled_for_session = m_snapshot.dxgi_disabled_for_session;
+    t.top_black_strip_streak = m_snapshot.top_black_strip_streak;
+    t.dxgi_instability_score = m_snapshot.dxgi_instability_score;
+    t.force_software_capture_until_unix_ms = m_snapshot.force_software_capture_until_unix_ms;
+    return t;
+}
+
 RemoteProcessStreamSource::~RemoteProcessStreamSource()
 {
-    terminate();
+    stop();
 }
 
 HWND RemoteProcessStreamSource::launch_process(const std::string& exe_path) 
@@ -117,6 +140,14 @@ HWND RemoteProcessStreamSource::launch_process(const std::string& exe_path)
         m_height = (m_height + 1) & ~1; // 高度保持偶数
     }
     m_video_encode_pipeline.initialize_encoder(m_width, m_height);
+    {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        m_snapshot = FrameSnapshot{};
+        m_snapshot.capture_width = m_width;
+        m_snapshot.capture_height = m_height;
+    }
+    m_capture_width_atomic.store(m_width, std::memory_order_relaxed);
+    m_capture_height_atomic.store(m_height, std::memory_order_relaxed);
     std::cout << "[proc] launch_process done, hasWindow=" << (m_mainWindow ? 1 : 0) << std::endl;
     return m_mainWindow;
 }
@@ -143,14 +174,47 @@ void RemoteProcessStreamSource::start()
     m_video_encode_pipeline.reset_for_stream_start();
     m_capture_backend_state.reset_for_stream_start();
 
+    // 重置帧节流策略状态：避免跨会话计数残留导致采样帧率异常抖动。
+    m_frame_pacing_policy.reset(m_active_fps, m_idle_fps, m_idle_enter_stable_frames);
+    m_fps = m_active_fps;
+    {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        m_snapshot = FrameSnapshot{};
+    }
+    m_capture_width_atomic.store(m_width, std::memory_order_relaxed);
+    m_capture_height_atomic.store(m_height, std::memory_order_relaxed);
+    // 初始化快照的分辨率，避免前端在首轮发送时读取到 0 值。
+    update_snapshot_from_current_state();
+
+    // 启动后台生产线程：由它在收到 Stream 请求后生产下一条样本。
+    {
+        std::lock_guard<std::mutex> lk(m_producer_mtx);
+        m_need_produce = false;
+        m_has_produced = false;
+    }
+    if (!m_producer_thread.joinable()) {
+        m_producer_thread = std::thread(&RemoteProcessStreamSource::producer_loop, this);
+    }
+
     m_bmp_dump_writer.reset_session();
 }
 
 void RemoteProcessStreamSource::stop()
 {
-    // 强生命周期保证：
-    // 当上层停止流（前端关闭页面/流）时，
-    // 必须终止已拉起进程并释放资源。
+    {
+        std::lock_guard<std::mutex> lk(m_producer_mtx);
+        m_running = false;
+        m_need_produce = false;
+        // 唤醒可能正在等待的 Stream::send_sample 线程。
+        m_has_produced = true;
+    }
+    m_producer_cv.notify_all();
+
+    if (m_producer_thread.joinable()) {
+        m_producer_thread.join();
+    }
+
+    // 强生命周期保证：终止已拉起的进程。
     terminate();
 }
 
@@ -249,6 +313,20 @@ BmpDumpDiag RemoteProcessStreamSource::make_dump_diag(bool use_hw_capture) const
     };
 }
 
+void RemoteProcessStreamSource::update_snapshot_from_current_state()
+{
+    std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+    m_snapshot.capture_width = m_width;
+    m_snapshot.capture_height = m_height;
+    m_capture_width_atomic.store(m_width, std::memory_order_relaxed);
+    m_capture_height_atomic.store(m_height, std::memory_order_relaxed);
+    m_snapshot.last_capture_used_hw = m_capture_backend_state.get_last_capture_used_hw();
+    m_snapshot.dxgi_disabled_for_session = m_capture_backend_state.is_dxgi_disabled_for_session();
+    m_snapshot.top_black_strip_streak = m_capture_backend_state.get_top_black_strip_streak();
+    m_snapshot.dxgi_instability_score = m_capture_backend_state.get_dxgi_instability_score();
+    m_snapshot.force_software_capture_until_unix_ms = m_capture_backend_state.get_force_software_capture_until_unix_ms();
+}
+
 void RemoteProcessStreamSource::emit_hold_or_empty_sample(bool request_idr)
 {
     const bool steadyFrameHold = (m_lock_capture_backend && !m_locked_use_hw_capture);
@@ -302,8 +380,11 @@ bool RemoteProcessStreamSource::discard_if_capture_too_slow(std::chrono::steady_
     m_capture_backend_state.on_slow_capture(rpc_unix_epoch_ms(), use_hw_capture);
     emit_hold_or_empty_sample(false);
     m_sample_output_state.advance_time(get_sample_duration_us());
-    m_last_capture_ms = static_cast<uint32_t>(capture_ms);
-    m_last_encode_ms = 0;
+    {
+        std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+        m_snapshot.last_capture_ms = static_cast<uint32_t>(capture_ms);
+        m_snapshot.last_encode_ms = 0;
+    }
     return true;
 }
 
@@ -384,6 +465,15 @@ void RemoteProcessStreamSource::ensure_encoder_layout(int captured_w, int captur
 void RemoteProcessStreamSource::update_fps_pacing_and_mapping(const std::vector<uint8_t>& frame, int captured_w, int captured_h,
                                                    int cap_min_left, int cap_min_top)
 {
+    // 根据输入活跃度与帧变化情况动态调整采样帧率：
+    // - 用户输入活跃：尽快恢复/保持 active_fps
+    // - 连续稳定帧：逐步降到 idle_fps，降低带宽与编码压力
+    const uint64_t now_ms = rpc_unix_epoch_ms();
+    const uint64_t last_input_ms = InputController::last_input_activity_ms();
+    const bool recent_input = (last_input_ms != 0 && now_ms >= last_input_ms &&
+                                (now_ms - last_input_ms) <= m_recent_input_window_ms);
+    m_fps = m_frame_pacing_policy.update_and_get_fps(frame, captured_w, captured_h, recent_input);
+
     InputController::instance()->set_capture_screen_rect(cap_min_left, cap_min_top, captured_w, captured_h);
     m_last_good_rgb_frame = frame;
     m_last_good_rgb_w = captured_w;
@@ -405,9 +495,12 @@ void RemoteProcessStreamSource::finalize_encode_rgb(std::vector<uint8_t>& frame,
     if (result.encode_ok) {
         m_sample_output_state.set_current(std::move(result.sample));
         m_sample_output_state.advance_time(get_sample_duration_us());
-        m_last_capture_ms = result.capture_ms;
-        m_last_encode_ms = result.encode_ms;
-        m_last_frame_unix_ms = result.frame_unix_ms;
+        {
+            std::lock_guard<std::mutex> lk(m_snapshot_mtx);
+            m_snapshot.last_capture_ms = result.capture_ms;
+            m_snapshot.last_encode_ms = result.encode_ms;
+            m_snapshot.last_frame_unix_ms = result.frame_unix_ms;
+        }
         m_pre_video_empty_frame_streak = 0;
         m_had_successful_video = true;
         m_sample_output_state.commit_current_as_last_good();
@@ -424,52 +517,115 @@ void RemoteProcessStreamSource::finalize_encode_rgb(std::vector<uint8_t>& frame,
 
 void RemoteProcessStreamSource::load_next_sample()
 {
-    // 1) 流未运行时不再推进采集/编码，避免 stop 后仍触发抓取。
+    // Consumer：由 Stream 调用时，等待 producer 线程生产下一条样本。
+    // 注意：生产/写入 SampleOutputState 发生在 producer 线程，读取发生在 Stream 的发送线程。
     if (!m_running) return;
 
-    // 2) 窗口与健康：主窗恢复、PID 重绑定、无窗宽限期与远端退出通知；
-    //    若当前无法继续（无窗等），内部会推进时间轴或提前返回。
+    std::unique_lock<std::mutex> lk(m_producer_mtx);
+    m_has_produced = false;
+    m_need_produce = true;
+    m_producer_cv.notify_one();
+    m_producer_cv.wait(lk, [this]() { return m_has_produced || !m_running; });
+}
+
+void RemoteProcessStreamSource::producer_loop()
+{
+    // Producer：负责把原 load_next_sample 的采集+编码逻辑写入 SampleOutputState。
     static auto last_no_window_diag = std::chrono::steady_clock::now();
-    if (!tick_window_and_health(last_no_window_diag)) return;
+    auto finish_production = [this]() {
+        update_snapshot_from_current_state();
+        m_has_produced = true;
+        m_producer_cv.notify_one();
+    };
 
-    // 3) 为单帧采集计时，并据后端状态决定本帧是否走 DXGI（实际路径以 grab 结果为准）。
-    int width = 0, height = 0;
-    int cap_min_left = 0, cap_min_top = 0;
-    const auto t_cap_begin = std::chrono::steady_clock::now();
+    while (true) {
+        std::unique_lock<std::mutex> lk(m_producer_mtx);
+        m_producer_cv.wait(lk, [this]() { return m_need_produce || !m_running; });
+        if (!m_running) break;
 
-    const uint64_t cap_now_ms = rpc_unix_epoch_ms();
-    const bool use_hw_capture = decide_use_hw_capture(cap_now_ms);
-    bool used_hw_capture_actual = use_hw_capture;
+        m_need_produce = false;
+        lk.unlock();
 
-    // 4) 抓取一帧 RGB（含主窗路径；失败时可能走 hold/空样本，函数返回 false）。
-    std::vector<uint8_t> frame;
-    if (!grab_rgb_frame(width, height, cap_min_left, cap_min_top, frame, use_hw_capture, used_hw_capture_actual)) return;
+        // 1) 窗口与健康：主窗恢复、PID 重绑定、无窗宽限期与远端退出通知；
+        //    若 tick 返回 false，表示本轮只需要完成 tick 内部对时间轴/样本状态的更新，
+        //    不再继续抓帧与编码（保持旧 load_next_sample 的语义）。
+        const bool tick_ok = tick_window_and_health(last_no_window_diag);
+        if (!tick_ok) {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+            continue;
+        }
 
-    // 5) 调试：按配置在采集后落盘 BMP（不影响主编码路径）。
-    const BmpDumpDiag dump_diag = make_dump_diag(used_hw_capture_actual);
-    m_bmp_dump_writer.dump_capture_if_needed(frame, width, height, dump_diag);
+        // 2) 为单帧采集计时，并据后端状态决定本帧是否走 DXGI（实际路径以 grab 结果为准）。
+        int width = 0, height = 0;
+        int cap_min_left = 0, cap_min_top = 0;
+        const auto t_cap_begin = std::chrono::steady_clock::now();
 
-    const auto t_after_cap = std::chrono::steady_clock::now();
-    // 6) 可选：采集过慢则丢弃本帧并推进时间（策略见 CaptureDiscardPolicy）。
-    if (discard_if_capture_too_slow(t_cap_begin, t_after_cap, use_hw_capture))
-        return;
-    // 7) 空/无效尺寸帧丢弃；首视频前可累积空帧 streak 触发主窗重选。
-    if (discard_if_empty_frame(frame, width, height))
-        return;
-    // 8) 可疑帧过滤（DXGI 黑帧/顶黑条等）：当前关闭，开启后在此做 GDI 兜底或丢帧。
-    if (!filter_suspicious_frame(frame, width, height, cap_min_left, cap_min_top))
-        return;
+        const uint64_t cap_now_ms = rpc_unix_epoch_ms();
+        const bool use_hw_capture = decide_use_hw_capture(cap_now_ms);
+        bool used_hw_capture_actual = use_hw_capture;
 
-    m_bmp_dump_writer.dump_encode_if_needed(frame, width, height, dump_diag);
+        // 3) 抓取一帧 RGB（含主窗路径；失败时可能走 hold/空样本，函数返回 false）。
+        std::vector<uint8_t> frame;
+        if (!grab_rgb_frame(width, height, cap_min_left, cap_min_top, frame, use_hw_capture, used_hw_capture_actual)) {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+            continue;
+        }
 
-    // 9) 根据采集分辨率调整编码器布局（含 streak 防抖，避免分辨率抖动）。
-    bool applied_layout = false;
-    ensure_encoder_layout(width, height, applied_layout);
+        // 4) 调试：按配置在采集后落盘 BMP（不影响主编码路径）。
+        const BmpDumpDiag dump_diag = make_dump_diag(used_hw_capture_actual);
+        m_bmp_dump_writer.dump_capture_if_needed(frame, width, height, dump_diag);
 
-    // 10) 更新鼠标映射用的屏幕区域，并缓存「上一帧好 RGB」供卫生检查等使用。
-    update_fps_pacing_and_mapping(frame, width, height, cap_min_left, cap_min_top);
-    // 11) 缩放/编码为 H264 样本，写入当前 sample 与时间戳，并标记是否已成功出过视频。
-    finalize_encode_rgb(frame, width, height, t_cap_begin, t_after_cap, applied_layout);
+        const auto t_after_cap = std::chrono::steady_clock::now();
+
+        // 5) 可选：采集过慢则丢弃本帧并推进时间（策略见 CaptureDiscardPolicy）。
+        if (discard_if_capture_too_slow(t_cap_begin, t_after_cap, use_hw_capture)) {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+            continue;
+        }
+
+        // 6) 空/无效尺寸帧丢弃；首视频前可累积空帧 streak 触发主窗重选。
+        if (discard_if_empty_frame(frame, width, height)) {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+            continue;
+        }
+
+        // 7) 可疑帧过滤（DXGI 黑帧/顶黑条等）：当前关闭，开启后在此做 GDI 兜底或丢帧。
+        if (!filter_suspicious_frame(frame, width, height, cap_min_left, cap_min_top)) {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+            continue;
+        }
+
+        m_bmp_dump_writer.dump_encode_if_needed(frame, width, height, dump_diag);
+
+        // 8) 根据采集分辨率调整编码器布局（含 streak 防抖，避免分辨率抖动）。
+        bool applied_layout = false;
+        ensure_encoder_layout(width, height, applied_layout);
+
+        // 9) 更新鼠标映射用的屏幕区域，并缓存「上一帧好 RGB」供卫生检查等使用。
+        update_fps_pacing_and_mapping(frame, width, height, cap_min_left, cap_min_top);
+
+        // 10) 缩放/编码为 H264 样本，写入当前 sample 与时间戳，并标记是否已成功出过视频。
+        finalize_encode_rgb(frame, width, height, t_cap_begin, t_after_cap, applied_layout);
+
+        // 本轮生产完成，唤醒 consumer。
+        {
+            std::lock_guard<std::mutex> lk2(m_producer_mtx);
+            finish_production();
+        }
+    }
+
+    // 退出时唤醒可能等待的 consumer。
+    {
+        std::lock_guard<std::mutex> lk(m_producer_mtx);
+        update_snapshot_from_current_state();
+        m_has_produced = true;
+    }
+    m_producer_cv.notify_all();
 }
 
 rtc::binary RemoteProcessStreamSource::get_sample()

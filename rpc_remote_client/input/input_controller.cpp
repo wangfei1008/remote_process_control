@@ -5,6 +5,7 @@
 #include <cmath>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 
 #ifndef ASFW_ANY
 #define ASFW_ANY 0x0000FFFF
@@ -26,8 +27,7 @@ void InputController::ensure_process_dpi_awareness()
 	using SetCtxFn = BOOL(WINAPI*)(HANDLE);
 	using DpiCtx = HANDLE;
 	const DpiCtx PER_MONITOR_AWARE_V2 = reinterpret_cast<DpiCtx>(static_cast<LONG_PTR>(-4));
-	SetCtxFn fn = reinterpret_cast<SetCtxFn>(
-		GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+	SetCtxFn fn = reinterpret_cast<SetCtxFn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
 	if (fn)
 		(void)fn(PER_MONITOR_AWARE_V2);
 }
@@ -53,9 +53,15 @@ InputController* InputController::instance()
 	return m_instance;
 }
 
-void InputController::set_mouse_target(HWND hwnd)
+void InputController::bind_mouse_target(HWND hwnd)
 {
 	m_map_hwnd = hwnd;
+}
+
+void InputController::unbind_mouse_target()
+{
+	m_map_hwnd = nullptr;
+	m_cap_left = m_cap_top = m_cap_w = m_cap_h = 0;
 }
 
 void InputController::set_capture_screen_rect(int left, int top, int width, int height)
@@ -64,12 +70,6 @@ void InputController::set_capture_screen_rect(int left, int top, int width, int 
 	m_cap_top = top;
 	m_cap_w = width;
 	m_cap_h = height;
-}
-
-void InputController::clear_mouse_target()
-{
-	m_map_hwnd = nullptr;
-	m_cap_left = m_cap_top = m_cap_w = m_cap_h = 0;
 }
 
 void InputController::bring_mouse_target_foreground()
