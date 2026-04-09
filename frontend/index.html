@@ -9,122 +9,7 @@
 <body>
     <!-- Electron 无边框时左侧窄条可拖动窗口（出画后显示） -->
     <div id="electron-drag-edge" class="electron-drag-edge" aria-hidden="true"></div>
-    <div class="container">
-        <header>
-            <h1>Remote Process Control</h1>
-            <p>通过 WebRTC 观看并控制远端进程窗口（兼容 macOS / Linux / Windows 浏览器）</p>
-        </header>
-
-        <div class="control-panel">
-            <div class="connection-section">
-                <h2>Connection Settings</h2>
-                <div class="option">
-                    <input id="use-stun" type="checkbox"/>
-                    <label for="use-stun">Use STUN server</label>
-                </div>
-                <div class="option">
-                    <input id="enable-remote-control" type="checkbox" checked/>
-                    <label for="enable-remote-control">Enable Remote Control</label>
-                </div>
-
-                <div class="quick-launch-row">
-                    <button type="button" id="toggle-exe-details" class="btn-icon" title="展开/收起进程路径与停止策略">⚙</button>
-                    <div class="app-launch-tiles">
-                        <div id="app-launch-tile-notepad" class="app-launch-tile" role="button" tabindex="0"
-                             data-rpc-exe="C:\Windows\System32\notepad.exe"
-                             title="双击：使用记事本并进入远程画面（需 WebSocket 已连接）">
-                            <span class="tile-icon" aria-hidden="true">📝</span>
-                            <span class="tile-label">记事本</span>
-                        </div>
-                        <div id="app-launch-tile-photoshop" class="app-launch-tile app-launch-tile--photoshop" role="button" tabindex="0"
-                             data-rpc-exe="C:\Program Files\Adobe\Adobe Photoshop CC 2019\Photoshop.exe"
-                             title="双击：使用 Photoshop 2019 并进入远程画面（远端须已安装该路径）">
-                            <span class="tile-icon" aria-hidden="true">🎨</span>
-                            <span class="tile-label">Photoshop</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="exe-details-panel" class="exe-details-panel" style="display: none;">
-                    <div class="option">
-                        <label for="exe-path" style="min-width: 120px;">exePath</label>
-                        <input id="exe-path" type="text" placeholder="C:\\Windows\\System32\\notepad.exe"/>
-                    </div>
-                    <div class="option">
-                        <label for="stop-policy" style="min-width: 120px;">Stop policy</label>
-                        <select id="stop-policy">
-                            <option value="close_process" selected>关闭连接并结束进程</option>
-                            <option value="keep_process">仅关闭连接，保留进程</option>
-                            <option value="auto_close">无人连接 N 秒后自动关闭进程</option>
-                        </select>
-                    </div>
-                    <div class="option" id="idle-seconds-row" style="display:none;">
-                        <label for="idle-seconds" style="min-width: 120px;">Idle seconds</label>
-                        <input id="idle-seconds" type="text" value="10" placeholder="例如：10"/>
-                    </div>
-                </div>
-
-                <div class="buttons">
-                    <button id="start" class="btn-primary" disabled>Start Connection</button>
-                    <button id="stop" class="btn-danger" disabled>Stop Connection</button>
-                </div>
-            </div>
-
-            <div class="status-section">
-                <h2>Connection Status</h2>
-                <div class="status-grid">
-                    <div class="status-item">
-                        <span class="status-label">WebSocket:</span>
-                        <span class="status-value" id="websocket-state">Disconnected</span>
-                        <span class="status-indicator" id="websocket-indicator"></span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">ICE Connection:</span>
-                        <span class="status-value" id="ice-connection-state">disconnected</span>
-                        <span class="status-indicator" id="ice-connection-indicator"></span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">ICE Gathering:</span>
-                        <span class="status-value" id="ice-gathering-state">new</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Signaling:</span>
-                        <span class="status-value" id="signaling-state">stable</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Data Channel:</span>
-                        <span class="status-value" id="data-channel-state">disconnected</span>
-                        <span class="status-indicator" id="data-channel-indicator"></span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Capture Health:</span>
-                        <span class="status-value" id="capture-health-state">waiting...</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="data-section">
-            <div class="data-channel">
-                <h2>Data Channel Activity</h2>
-                <pre id="data-channel-log">Data channel messages will appear here...</pre>
-            </div>
-
-            <div class="sdp-section">
-                <h2>Session Description Protocol</h2>
-                <div class="sdp-container">
-                    <div class="sdp-box">
-                        <h3>Offer</h3>
-                        <pre id="offer-sdp">Waiting for offer...</pre>
-                    </div>
-                    <div class="sdp-box">
-                        <h3>Answer</h3>
-                        <pre id="answer-sdp">Waiting for answer...</pre>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- 经典单页 UI 已移除：入口页仅承载桌面容器 / rpcWindow 视频舞台等必要节点 -->
 
     <!-- 应用模式（?rpcWindow=1）：先显示等待文案，出画后由 JS 隐藏 -->
     <div id="rpc-window-wait" class="rpc-window-wait" hidden>
@@ -152,11 +37,11 @@
     <script src="./desktop_process_manager.js" defer></script>
     <!-- Desktop Container：使用普通 script，支持 file:// -->
     <script src="./desktopMode.js" defer></script>
-    <!-- client.js：须在 ui/webrtc/signaling 之后执行 -->
-    <script src="./client.js" defer></script>
     <!-- UI / WebRTC / 信令（须在 client 之前加载完毕，由 DOMContentLoaded 后启动） -->
     <script src="./uiLayer.js" defer></script>
     <script src="./webrtcLayer.js" defer></script>
     <script src="./signalingLayer.js" defer></script>
+    <!-- client.js：依赖 ui/webrtc/signaling 已挂载到 window -->
+    <script src="./client.js" defer></script>
 </body>
 </html>

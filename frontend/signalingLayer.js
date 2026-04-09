@@ -7,21 +7,13 @@
     window.__rpcSignaling = window.__rpcSignaling || {};
 
     function buildSignalingWebSocketUrl(clientId) {
+        // 项目已统一由 rpc_config.js 提供 URL 拼装（支持 URL ?signaling= / signaling_config.js/json）
         if (typeof window.__rpcBuildSignalingWebSocketUrl === 'function') {
             return window.__rpcBuildSignalingWebSocketUrl(clientId);
         }
-        const params = new URLSearchParams(window.location.search);
-        const signaling = params.get('signaling');
-        if (signaling) {
-            const base = signaling.replace(/\/+$/, '');
-            return base + '/' + clientId;
-        }
-        const isHttps = window.location.protocol === 'https:';
-        const wsProto = isHttps ? 'wss:' : 'ws:';
-        let host = window.location.hostname;
-        if (!host && window.location.protocol === 'file:') host = '127.0.0.1';
-        if (!host) host = '127.0.0.1';
-        return wsProto + '//' + host + ':9090/' + clientId;
+        // 极端兜底（理论上不应发生）
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return wsProto + '//127.0.0.1:9090/' + clientId;
     }
 
     window.__rpcSignaling.createSignalingClient = function createSignalingClient(session, doc, ui, callbacks) {
@@ -43,8 +35,6 @@
                 session.websocket.onopen = function () {
                     if (clearSessionTimer) clearSessionTimer(session, 'rpcWsConnectTimer');
                     if (updateWebSocketState) updateWebSocketState(ui, 'connected');
-                    const startBtn = doc.getElementById('start');
-                    if (startBtn) startBtn.disabled = false;
                     if (logDataChannel) logDataChannel(ui, 'WebSocket connected. clientId=' + session.clientId);
                     if (typeof callbacks.onWebSocketOpen === 'function') {
                         try {
@@ -65,8 +55,6 @@
                         return;
                     }
                     if (message.type === 'offer') {
-                        const offerEl = doc.getElementById('offer-sdp');
-                        if (offerEl) offerEl.textContent = message.sdp;
                         Promise.resolve(onOffer(message)).catch(function (offerErr) {
                             console.error('[RemoteProcessControl] 处理 offer 失败:', offerErr);
                             if (logDataChannel) {
@@ -81,7 +69,7 @@
                         logDataChannel(ui, 'WebSocket 错误（请确认信令服务已监听 9090，且 HTTPS 页面需使用 WSS 或改为 HTTP 打开前端）');
                     }
                     if (updateWebSocketState) updateWebSocketState(ui, 'error');
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
+                    if (session.rpcWindowMode) {
                         window.setTimeout(function () {
                             if (!shouldDeferRpcShellCloseUntilVideo || !shouldDeferRpcShellCloseUntilVideo(session)) {
                                 if (closeRpcShellOrWindow) closeRpcShellOrWindow(session, 'websocket_error');
@@ -95,7 +83,7 @@
                         logDataChannel(ui, 'WebSocket closed (code=' + ev.code + (ev.reason ? ', ' + ev.reason : '') + ')');
                     }
                     if (updateWebSocketState) updateWebSocketState(ui, 'disconnected');
-                    if (session.rpcWindowMode || session.electronCompactLauncher) {
+                    if (session.rpcWindowMode) {
                         window.setTimeout(function () {
                             if (!shouldDeferRpcShellCloseUntilVideo || !shouldDeferRpcShellCloseUntilVideo(session)) {
                                 if (closeRpcShellOrWindow) closeRpcShellOrWindow(session, 'websocket_closed_' + ev.code);

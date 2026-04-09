@@ -48,9 +48,7 @@
         // Each remote "app window" is rendered by an iframe running rpcWindow=1.
         doc.documentElement.classList.add('rpc-desktop-mode');
 
-        // Hide legacy single-session UI.
-        const legacyContainer = doc.querySelector('.container');
-        if (legacyContainer) legacyContainer.style.display = 'none';
+        // 经典页面已移除，无需再隐藏 .container
 
         // Background root.
         const desktopRoot = doc.createElement('div');
@@ -180,31 +178,10 @@
             toggleStartMenu(true);
         });
 
-        /** @type {Array<object>} 用户配置的启动项（不含「我的数据」） */
-        let userAppEntries = [];
-        if (window.__rpcDesktopProcessManager && typeof window.__rpcDesktopProcessManager.loadEntries === 'function') {
-            userAppEntries = window.__rpcDesktopProcessManager.loadEntries(doc);
-        } else {
-            const appTileEls = Array.from(doc.querySelectorAll('.app-launch-tile[data-rpc-exe]'));
-            userAppEntries = appTileEls.map(function (el) {
-                const exePath = el.getAttribute('data-rpc-exe') || '';
-                const labelEl = el.querySelector('.tile-label');
-                const iconEl = el.querySelector('.tile-icon');
-                return {
-                    id: 'app_legacy_' + window.__rpcRandomId(8),
-                    name: labelEl ? labelEl.textContent.trim() : exePath,
-                    icon: iconEl ? iconEl.textContent.trim() : '⬚',
-                    workPath: exePath,
-                };
-            }).filter(function (a) { return a.workPath; });
-            if (!userAppEntries.length) {
-                userAppEntries = [{
-                    id: 'app_legacy_default',
-                    name: '记事本',
-                    icon: '📝',
-                    workPath: 'C:\\Windows\\System32\\notepad.exe',
-                }];
-            }
+        function getUserAppEntries() {
+            const mgr = window.__rpcDesktopProcessManager;
+            if (mgr && typeof mgr.loadEntries === 'function') return mgr.loadEntries();
+            return [];
         }
 
         function makeMyDataApp() {
@@ -223,21 +200,19 @@
         }
 
         function entryToLaunchApp(entry) {
-            const mgr = window.__rpcDesktopProcessManager;
-            const exePath = mgr && mgr.resolveExePath ? mgr.resolveExePath(entry) : (entry.exePath || entry.workPath || '');
             return {
                 id: entry.id,
                 name: entry.name,
                 icon: entry.icon || '⬚',
                 workPath: entry.workPath,
-                executable: entry.executable,
-                exePath: exePath,
+                workNode: entry.workNode,
+                exePath: entry.workPath,
             };
         }
 
         /** 完整列表：我的数据 + 用户进程 */
         function buildAppDefs() {
-            const userPart = userAppEntries.map(entryToLaunchApp).filter(function (a) {
+            const userPart = getUserAppEntries().map(entryToLaunchApp).filter(function (a) {
                 return String(a.exePath || '').trim().length > 0;
             });
             return [makeMyDataApp()].concat(userPart);
@@ -246,16 +221,6 @@
         let appDefs = buildAppDefs();
 
         let dpmPanelApi = null;
-
-        function openLegacyConnectionPanel() {
-            const qs = new URLSearchParams(window.location.search);
-            qs.delete('rpcWindow');
-            qs.delete('kiosk');
-            qs.delete('autostart');
-            qs.delete('exePath');
-            qs.set('rpcLegacy', '1');
-            window.location.href = window.location.pathname + '?' + qs.toString();
-        }
 
         function applyIconToElement(box, iconValue) {
             box.innerHTML = '';
@@ -281,11 +246,15 @@
             box.textContent = v;
         }
 
-        function makeIframeSrc(exePath) {
+        function makeIframeSrc(exePath, workNode) {
             const qs = new URLSearchParams(window.location.search);
             qs.set('rpcWindow', '1');
             qs.set('autostart', '1');
             qs.set('exePath', exePath);
+            if (workNode) qs.set('workNode', String(workNode));
+            // 兜底：把“信令服务地址”也透传给子窗口（尤其是 file:// iframe 场景）
+            const signalingBase = signalingBaseForQueryParamFromConfig();
+            if (signalingBase) qs.set('signaling', signalingBase);
             return window.location.pathname + '?' + qs.toString();
         }
 
@@ -316,7 +285,7 @@
                 iconWrap.style.flexDirection = 'column';
                 iconWrap.style.alignItems = 'center';
                 iconWrap.style.justifyContent = 'flex-start';
-                iconWrap.style.cursor = 'default';
+                iconWrap.style.cursor = 'pointer';
                 iconWrap.style.pointerEvents = 'auto';
 
                 const iconBox = doc.createElement('div');
@@ -345,7 +314,7 @@
 
                 iconWrap.appendChild(iconBox);
                 iconWrap.appendChild(label);
-                iconWrap.title = app.exePath || app.launchPath || app.name;
+                iconWrap.title = (app.workNode ? ('[' + app.workNode + '] ') : '') + (app.exePath || app.launchPath || app.name);
 
                 iconWrap.addEventListener('dblclick', function (e) {
                     e.stopPropagation();
@@ -476,12 +445,12 @@
             dpmPanelApi = window.__rpcDesktopProcessManager.mountPanel({
                 doc: doc,
                 desktopRoot: desktopRoot,
-                getEntries: function () { return userAppEntries; },
-                setEntriesAndRefresh: function (arr) {
-                    userAppEntries = arr.slice();
-                    window.__rpcDesktopProcessManager.saveEntries(userAppEntries);
-                    refreshAppViews();
-                },
+            });
+        }
+
+        if (window.__rpcDesktopAppStore && typeof window.__rpcDesktopAppStore.subscribe === 'function') {
+            window.__rpcDesktopAppStore.subscribe(function () {
+                refreshAppViews();
             });
         }
 
@@ -491,7 +460,7 @@
             if (dpmPanelApi && typeof dpmPanelApi.open === 'function') {
                 dpmPanelApi.open();
             } else {
-                openLegacyConnectionPanel();
+                console.warn('[rpc-desktop] 进程管理面板未加载');
             }
         });
 
@@ -547,17 +516,8 @@
                 openAppWindow(app);
                 return;
             }
-            const mgr = window.__rpcDesktopProcessManager;
-            const pathForRun = String(app.exePath || '').trim();
-            if (mgr && typeof mgr.isProbablyRunnablePath === 'function' && mgr.isProbablyRunnablePath(pathForRun)) {
-                openAppWindow(app);
-                return;
-            }
-            console.log(
-                '[rpc-desktop] 模拟启动进程: ' + app.name
-                + ' | 工作路径: ' + (app.workPath || '')
-                + (app.executable ? (' | 可执行: ' + app.executable) : '')
-            );
+            // 进程管理 v2：由 workPath/workNode 决定启动项；不再依赖“是否像可执行文件”的启发式判断
+            openAppWindow(app);
         }
 
         function openAppWindow(app) {
@@ -689,7 +649,21 @@
             iframe.style.border = '0';
             iframe.style.display = 'block';
             iframe.tabIndex = 0;
-            iframe.src = app.launchPath ? app.launchPath : makeIframeSrc(app.exePath);
+            if (app.launchPath) {
+                try {
+                    var base = String(app.launchPath);
+                    var url = new URL(base, window.location.href);
+                    if (app.workNode) url.searchParams.set('workNode', String(app.workNode));
+                    var sBase = signalingBaseForQueryParamFromConfig();
+                    if (sBase) url.searchParams.set('signaling', String(sBase));
+                    iframe.src = url.pathname + url.search;
+                } catch (_) {
+                    iframe.src = app.launchPath;
+                }
+            } else {
+                iframe.src = makeIframeSrc(app.exePath, app.workNode);
+            }
+            // console.info('[rpc-desktop] iframe.src=', iframe.src);
             content.appendChild(iframe);
 
             const resizer = doc.createElement('div');

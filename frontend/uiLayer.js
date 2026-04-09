@@ -264,12 +264,6 @@
         const stage = getVideoStage(doc);
         if (!stage) return;
         stage.hidden = false;
-        if (session.electronCompactLauncher) {
-            session.electronVideoOpen = true;
-            doc.documentElement.classList.add('rpc-window-mode', 'electron-video-active');
-            const splash = doc.getElementById('rpc-window-wait');
-            if (splash) splash.hidden = true;
-        }
         session.activeVideo = getMainVideo(doc);
         if (session.activeVideo && session.activeVideo.srcObject) {
             session.activeVideo.play().catch(function () {});

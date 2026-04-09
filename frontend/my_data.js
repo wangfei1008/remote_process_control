@@ -526,7 +526,7 @@
             });
         }).then(function () {
             state.ws.send(JSON.stringify({
-                id: 'server',
+                id: getTargetWorkNodeId(),
                 type: state.pc.localDescription.type,
                 sdp: state.pc.localDescription.sdp,
             }));
@@ -548,6 +548,15 @@
         return proto + '//' + host + ':9090/' + clientId;
     }
 
+    function getTargetWorkNodeId() {
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var v = String(params.get('workNode') || '').trim();
+            if (v && v.length >= 1 && v.length <= 30) return v;
+        } catch (_) {}
+        return 'server';
+    }
+
     function connect() {
         log('日志系统已启动，正在连接信令服务...', 'system', 'system');
         var ws = new WebSocket(buildWsUrl(state.clientId));
@@ -555,7 +564,7 @@
 
         ws.onopen = function () {
             log('WebSocket 已连接');
-            ws.send(JSON.stringify({ id: 'server', type: 'file_request' }));
+            ws.send(JSON.stringify({ id: getTargetWorkNodeId(), type: 'file_request' }));
         };
         ws.onclose = function () { log('信令已断开'); };
         ws.onerror = function () { log('信令错误'); };

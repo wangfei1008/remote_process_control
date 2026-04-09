@@ -1,80 +1,24 @@
 /**
- * 桌面模式：启动进程管理（localStorage 持久化 + 右侧滑出面板）
- * 依赖：先于 desktopMode.js 加载
+ * 桌面模式：系统设置 → 进程管理
+ * - 全局状态（zustand-like）：window.__rpcDesktopAppStore
+ * - 持久化：localStorage（rpc_desktop_app_entries_v2）
+ * - UI：右侧 400px 滑出面板 + 半透明遮罩
  *
- * AppEntry: { id, name, icon, workPath, executable? }
+ * AppEntry: { id, name, icon, workPath, workNode }
  */
 (function () {
     'use strict';
 
-    var STORAGE_KEY = 'rpc_desktop_app_entries_v1';
+    var STORAGE_V2 = 'rpc_desktop_app_entries_v2';
+    var STORAGE_V1 = 'rpc_desktop_app_entries_v1';
+
+    var DEFAULT_ENTRIES = [
+        { id: '1', name: '文件管理器', icon: '📁', workPath: '/home/user', workNode: '本地主机' },
+        { id: '2', name: '终端', icon: '>_', workPath: '/bin/bash', workNode: '开发节点-01' },
+    ];
 
     function generateEntryId() {
         return 'app_' + window.__rpcRandomId(12);
-    }
-
-    function resolveExePath(entry) {
-        if (!entry) return '';
-        if (entry.exePath) return String(entry.exePath).trim();
-        var wp = String(entry.workPath || '').trim();
-        var ex = String(entry.executable || '').trim();
-        if (!wp) return '';
-        if (ex) {
-            var sep = wp.indexOf('\\') >= 0 ? '\\' : '/';
-            return wp.replace(/[/\\]+$/, '') + sep + ex;
-        }
-        return wp;
-    }
-
-    function isProbablyRunnablePath(s) {
-        if (!s) return false;
-        return /\.(exe|bat|cmd)$/i.test(s);
-    }
-
-    function migrateFromDom(doc) {
-        var tiles = Array.from(doc.querySelectorAll('.app-launch-tile[data-rpc-exe]'));
-        var out = tiles.map(function (el) {
-            var exePath = el.getAttribute('data-rpc-exe') || '';
-            var labelEl = el.querySelector('.tile-label');
-            var iconEl = el.querySelector('.tile-icon');
-            return {
-                id: generateEntryId(),
-                name: (labelEl && labelEl.textContent.trim()) || exePath,
-                icon: (iconEl && iconEl.textContent.trim()) || '⬚',
-                workPath: exePath,
-            };
-        }).filter(function (a) { return a.workPath; });
-        if (!out.length) {
-            out.push({
-                id: generateEntryId(),
-                name: '记事本',
-                icon: '📝',
-                workPath: 'C:\\Windows\\System32\\notepad.exe',
-            });
-        }
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
-        } catch (e) {}
-        return out;
-    }
-
-    function loadEntries(doc) {
-        try {
-            var raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-                var parsed = JSON.parse(raw);
-                if (Array.isArray(parsed) && parsed.length) {
-                    return parsed.map(normalizeEntry).filter(function (e) { return e && e.id && e.name; });
-                }
-            }
-        } catch (e) {}
-        return migrateFromDom(doc);
-    }
-
-    function saveEntries(entries) {
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-        } catch (e) {}
     }
 
     function normalizeEntry(e) {
@@ -84,348 +28,368 @@
             name: String(e.name || '').trim(),
             icon: String(e.icon || '⬚').trim() || '⬚',
             workPath: String(e.workPath || '').trim(),
-            executable: e.executable != null ? String(e.executable).trim() : '',
+            workNode: String(e.workNode || '').trim(),
         };
     }
 
     function validateName(name) {
         var s = String(name || '').trim();
-        if (!s || s.length < 1 || s.length > 20) return '名称须为 1–20 个字符';
+        if (!s || s.length < 1 || s.length > 20) return '名称长度须为 1–20';
         return '';
     }
 
     function validateWorkPath(p) {
         var s = String(p || '').trim();
         if (!s) return '工作路径不能为空';
-        if (s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) return '路径不能包含换行';
-        // 简单路径：盘符、UNC、绝对 Unix、~、或含路径分隔符
-        var ok = /^([A-Za-z]:[\\/]|\\\\|\/|~[\\/]|[A-Za-z]:[^\\/])/i.test(s) ||
-            (/[\\/]/.test(s) && s.length >= 3);
-        if (!ok) return '路径格式示例：C:\\\\Users\\\\... 或 /home/user/...';
         return '';
     }
 
-    var PRESET_ICONS = ['📝', '🎨', '🖥', '🗂', '⚙', '🌐', '📁', '💻', '📄', '⬚'];
+    function validateWorkNode(n) {
+        var s = String(n || '').trim();
+        if (!s || s.length < 1 || s.length > 30) return '工作节点名称长度须为 1–30';
+        return '';
+    }
 
-    /**
-     * @param {object} opts
-     * @param {Document} opts.doc
-     * @param {HTMLElement} opts.desktopRoot
-     * @param {function(): object[]} opts.getEntries
-     * @param {function(object[]): void} opts.setEntriesAndRefresh
-     */
+    function validateIcon(v) {
+        var s = String(v || '').trim();
+        if (!s) return '图标不能为空';
+        if (/^https?:\/\//i.test(s) || /^data:image\//i.test(s)) return '';
+        // 允许 emoji / 短文本
+        if (s.length > 8) return '图标过长（建议使用 emoji 或图片 URL）';
+        return '';
+    }
+
+    function safeParse(raw) {
+        try { return JSON.parse(raw); } catch (_) { return null; }
+    }
+
+    function loadFromStorageOrDefault() {
+        try {
+            var raw2 = localStorage.getItem(STORAGE_V2);
+            if (raw2) {
+                var p2 = safeParse(raw2);
+                if (Array.isArray(p2)) {
+                    var ok2 = p2.map(normalizeEntry).filter(function (x) { return x && x.id && x.name; });
+                    if (ok2.length) return ok2;
+                }
+            }
+        } catch (_) {}
+
+        // migrate v1 -> v2
+        try {
+            var raw1 = localStorage.getItem(STORAGE_V1);
+            if (raw1) {
+                var p1 = safeParse(raw1);
+                if (Array.isArray(p1) && p1.length) {
+                    var migrated = p1.map(function (x) {
+                        var n = normalizeEntry({
+                            id: x.id,
+                            name: x.name,
+                            icon: x.icon,
+                            workPath: x.workPath || x.exePath,
+                            workNode: '本地主机',
+                        });
+                        return n;
+                    }).filter(function (x) { return x && x.id && x.name; });
+                    if (migrated.length) {
+                        try { localStorage.setItem(STORAGE_V2, JSON.stringify(migrated)); } catch (_) {}
+                        return migrated;
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return DEFAULT_ENTRIES.map(normalizeEntry);
+    }
+
+    function persist(entries) {
+        try { localStorage.setItem(STORAGE_V2, JSON.stringify(entries)); } catch (_) {}
+    }
+
+    // zustand-like store
+    (function initStore(global) {
+        if (global.__rpcDesktopAppStore) return;
+        var state = { processes: loadFromStorageOrDefault() };
+        var listeners = [];
+        global.__rpcDesktopAppStore = {
+            getState: function () { return { processes: state.processes.slice() }; },
+            setState: function (next) {
+                if (!next || !Array.isArray(next.processes)) return;
+                state.processes = next.processes.slice();
+                persist(state.processes);
+                listeners.slice().forEach(function (fn) {
+                    try { fn({ processes: state.processes.slice() }); } catch (_) {}
+                });
+            },
+            subscribe: function (fn) {
+                if (typeof fn !== 'function') return function () {};
+                listeners.push(fn);
+                return function () {
+                    var i = listeners.indexOf(fn);
+                    if (i >= 0) listeners.splice(i, 1);
+                };
+            },
+        };
+    })(window);
+
+    var PRESET_ICONS = ['📁', '💻', '🖥', '⚙', '🌐', '🗂', '📄', '📝', '>_', '⬚'];
+
     function mountPanel(opts) {
         var doc = opts.doc;
         var desktopRoot = opts.desktopRoot;
-        var getEntries = opts.getEntries;
-        var setEntriesAndRefresh = opts.setEntriesAndRefresh;
 
         var overlay = doc.createElement('div');
         overlay.className = 'rpc-dpm-overlay';
-        overlay.style.cssText = [
-            'display:none', 'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.45)',
-            'z-index:6000', 'opacity:0', 'transition:opacity 0.2s ease',
-        ].join(';');
-
         var panel = doc.createElement('div');
         panel.className = 'rpc-dpm-panel';
-        panel.style.cssText = [
-            'position:fixed', 'top:0', 'right:0', 'width:min(420px,100vw)', 'height:100%',
-            'background:#121a2a', 'box-shadow:-8px 0 40px rgba(0,0,0,0.5)',
-            'z-index:6001', 'transform:translateX(100%)', 'transition:transform 0.25s ease',
-            'display:flex', 'flex-direction:column', 'border-left:1px solid rgba(255,255,255,0.08)',
-        ].join(';');
 
         var header = doc.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.08);';
-        var hTitle = doc.createElement('div');
-        hTitle.textContent = '启动进程管理';
-        hTitle.style.cssText = 'font-size:15px;font-weight:700;color:#e7eefc;';
+        header.className = 'rpc-dpm-header';
+        var headerText = doc.createElement('div');
+        headerText.className = 'rpc-dpm-header-text';
+        var breadcrumb = doc.createElement('div');
+        breadcrumb.className = 'rpc-dpm-breadcrumb';
+        breadcrumb.textContent = '系统设置';
+        var title = doc.createElement('div');
+        title.className = 'rpc-dpm-title';
+        title.textContent = '进程管理';
+        headerText.appendChild(breadcrumb);
+        headerText.appendChild(title);
         var btnClose = doc.createElement('button');
         btnClose.type = 'button';
+        btnClose.className = 'rpc-dpm-close';
         btnClose.textContent = '✕';
-        btnClose.style.cssText = 'width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:#1a2233;color:#e7eefc;cursor:pointer;font-size:16px;line-height:1;';
-        header.appendChild(hTitle);
+        header.appendChild(headerText);
         header.appendChild(btnClose);
 
         var toolbar = doc.createElement('div');
-        toolbar.style.cssText = 'padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;';
+        toolbar.className = 'rpc-dpm-toolbar';
         var btnAdd = doc.createElement('button');
         btnAdd.type = 'button';
-        btnAdd.textContent = '+ 添加进程';
-        btnAdd.style.cssText = 'padding:8px 14px;border-radius:10px;border:1px solid rgba(120,160,255,0.4);background:rgba(60,90,200,0.35);color:#dbe4ff;cursor:pointer;font-weight:600;font-size:12px;';
+        btnAdd.className = 'rpc-dpm-btn rpc-dpm-btn--primary';
+        btnAdd.textContent = '+ 添加';
         toolbar.appendChild(btnAdd);
 
         var listWrap = doc.createElement('div');
-        listWrap.style.cssText = 'flex:1;overflow:auto;padding:8px 16px 16px;';
+        listWrap.className = 'rpc-dpm-list-wrap';
 
         var formWrap = doc.createElement('div');
-        formWrap.style.cssText = 'display:none;border-top:1px solid rgba(255,255,255,0.08);padding:14px 16px;background:rgba(0,0,0,0.2);';
+        formWrap.className = 'rpc-dpm-form-wrap';
 
-        function elLabel(text) {
-            var l = doc.createElement('label');
-            l.textContent = text;
-            l.style.cssText = 'display:block;font-size:11px;color:rgba(231,238,252,0.75);margin:10px 0 4px;';
-            return l;
+        function label(text) {
+            var el = doc.createElement('div');
+            el.className = 'rpc-dpm-label';
+            el.textContent = text;
+            return el;
         }
-        function elInput(placeholder) {
-            var inp = doc.createElement('input');
-            inp.type = 'text';
-            inp.placeholder = placeholder || '';
-            inp.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:#0d1424;color:#e7eefc;font-size:13px;';
-            return inp;
+
+        function input(placeholder) {
+            var el = doc.createElement('input');
+            el.type = 'text';
+            el.placeholder = placeholder || '';
+            el.className = 'rpc-dpm-input';
+            return el;
         }
-        var inpName = elInput('显示名称');
-        var inpWork = elInput('C:\\\\Users\\\\... 或 /home/user/projects');
-        var inpExe = elInput('可选，如 notepad.exe');
-        var inpIconUrl = elInput('图标 URL（可选）');
-        var presetRow = doc.createElement('div');
-        presetRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;';
-        var selectedPreset = '⬚';
-        var fileInput = doc.createElement('input');
-        fileInput.type = 'file';
-        fileInput.accept = 'image/*';
-        fileInput.style.cssText = 'margin-top:8px;font-size:11px;color:#9cf;';
 
-        var iconPreview = doc.createElement('div');
-        iconPreview.style.cssText = 'width:56px;height:56px;border-radius:12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;font-size:28px;margin-top:8px;overflow:hidden;';
-        iconPreview.textContent = '⬚';
+        var inpName = input('名称（1-20）');
+        var inpIconUrl = input('图标 URL（可选）');
+        var inpWorkPath = input('工作路径');
+        var inpWorkNode = input('工作节点名称（1-30）');
 
-        var errBox = doc.createElement('div');
-        errBox.style.cssText = 'color:#f88;font-size:12px;margin-top:8px;min-height:18px;';
+        var presets = doc.createElement('div');
+        presets.className = 'rpc-dpm-presets';
+        var selectedPreset = PRESET_ICONS[0];
 
-        var formActions = doc.createElement('div');
-        formActions.style.cssText = 'display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;';
+        var preview = doc.createElement('div');
+        preview.className = 'rpc-dpm-icon-preview';
+        preview.textContent = selectedPreset;
+
+        var err = doc.createElement('div');
+        err.className = 'rpc-dpm-error';
+
+        var actions = doc.createElement('div');
+        actions.className = 'rpc-dpm-form-actions';
         var btnSave = doc.createElement('button');
         btnSave.type = 'button';
+        btnSave.className = 'rpc-dpm-btn rpc-dpm-btn--primary';
         btnSave.textContent = '保存';
-        btnSave.style.cssText = 'padding:8px 16px;border-radius:10px;border:0;background:#3b5bdb;color:#fff;cursor:pointer;font-weight:600;font-size:12px;';
-        var btnCancelForm = doc.createElement('button');
-        btnCancelForm.type = 'button';
-        btnCancelForm.textContent = '取消';
-        btnCancelForm.style.cssText = 'padding:8px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#e7eefc;cursor:pointer;font-size:12px;';
-        formActions.appendChild(btnSave);
-        formActions.appendChild(btnCancelForm);
-
-        var editingId = null;
-        var iconMode = 'preset'; // preset | url | file
+        var btnCancel = doc.createElement('button');
+        btnCancel.type = 'button';
+        btnCancel.className = 'rpc-dpm-btn rpc-dpm-btn--ghost';
+        btnCancel.textContent = '取消';
+        actions.appendChild(btnSave);
+        actions.appendChild(btnCancel);
 
         PRESET_ICONS.forEach(function (em) {
             var b = doc.createElement('button');
             b.type = 'button';
+            b.className = 'rpc-dpm-preset-btn';
             b.textContent = em;
-            b.style.cssText = 'width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:#1a2233;cursor:pointer;font-size:18px;';
             b.addEventListener('click', function () {
                 selectedPreset = em;
-                iconMode = 'preset';
                 inpIconUrl.value = '';
-                fileInput.value = '';
-                iconPreview.innerHTML = '';
-                iconPreview.textContent = em;
+                preview.innerHTML = '';
+                preview.textContent = em;
             });
-            presetRow.appendChild(b);
+            presets.appendChild(b);
         });
 
-        formWrap.appendChild(elLabel('名称（必填）'));
+        formWrap.appendChild(label('名称（必填）'));
         formWrap.appendChild(inpName);
-        formWrap.appendChild(elLabel('图标（预设 / URL / 上传）'));
-        formWrap.appendChild(presetRow);
+        formWrap.appendChild(label('图标（URL 或预设，必填）'));
+        formWrap.appendChild(presets);
         formWrap.appendChild(inpIconUrl);
-        formWrap.appendChild(fileInput);
-        formWrap.appendChild(iconPreview);
-        formWrap.appendChild(elLabel('工作路径（必填）'));
-        formWrap.appendChild(inpWork);
-        formWrap.appendChild(elLabel('可执行文件名（可选）'));
-        formWrap.appendChild(inpExe);
-        formWrap.appendChild(errBox);
-        formWrap.appendChild(formActions);
+        formWrap.appendChild(preview);
+        formWrap.appendChild(label('工作路径（必填）'));
+        formWrap.appendChild(inpWorkPath);
+        formWrap.appendChild(label('工作节点名称（必填）'));
+        formWrap.appendChild(inpWorkNode);
+        formWrap.appendChild(err);
+        formWrap.appendChild(actions);
 
         panel.appendChild(header);
         panel.appendChild(toolbar);
         panel.appendChild(listWrap);
         panel.appendChild(formWrap);
-
         desktopRoot.appendChild(overlay);
         desktopRoot.appendChild(panel);
 
-        function setIconPreviewFromUrl(url) {
-            iconPreview.innerHTML = '';
+        var editingId = null;
+
+        function readIconValue() {
+            var url = String(inpIconUrl.value || '').trim();
+            if (url) return url;
+            return selectedPreset || '⬚';
+        }
+
+        function setPreviewFromUrl(url) {
+            preview.innerHTML = '';
             if (!url) {
-                iconPreview.textContent = selectedPreset || '⬚';
+                preview.textContent = selectedPreset || '⬚';
                 return;
             }
             if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url)) {
                 var img = doc.createElement('img');
                 img.src = url;
-                img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
                 img.onerror = function () {
-                    iconPreview.textContent = '⬚';
+                    preview.innerHTML = '';
+                    preview.textContent = '⬚';
                 };
-                iconPreview.appendChild(img);
+                preview.appendChild(img);
             } else {
-                iconPreview.textContent = url.length > 4 ? url.slice(0, 4) : url;
+                preview.textContent = url;
             }
         }
 
         inpIconUrl.addEventListener('input', function () {
-            var v = inpIconUrl.value.trim();
-            if (v) {
-                iconMode = 'url';
-                setIconPreviewFromUrl(v);
-            } else {
-                iconMode = 'preset';
-                iconPreview.innerHTML = '';
-                iconPreview.textContent = selectedPreset;
-            }
+            setPreviewFromUrl(String(inpIconUrl.value || '').trim());
         });
 
-        fileInput.addEventListener('change', function () {
-            var f = fileInput.files && fileInput.files[0];
-            if (!f) return;
-            var r = new FileReader();
-            r.onload = function () {
-                iconMode = 'file';
-                inpIconUrl.value = '';
-                setIconPreviewFromUrl(r.result);
-            };
-            r.readAsDataURL(f);
-        });
-
-        function readIconValue() {
-            if (iconMode === 'file' && iconPreview.querySelector('img')) {
-                var im = iconPreview.querySelector('img');
-                return im ? im.src : selectedPreset;
-            }
-            if (iconMode === 'url' && inpIconUrl.value.trim()) return inpIconUrl.value.trim();
-            return selectedPreset || '⬚';
+        function showForm(entry) {
+            formWrap.classList.add('rpc-dpm-form-wrap--open');
+            panel.classList.add('rpc-dpm-panel--editing');
+            editingId = entry ? entry.id : null;
+            inpName.value = entry ? entry.name : '';
+            inpWorkPath.value = entry ? entry.workPath : '';
+            inpWorkNode.value = entry ? entry.workNode : '';
+            inpIconUrl.value = (entry && entry.icon && (/^https?:\/\//i.test(entry.icon) || /^data:image\//i.test(entry.icon)))
+                ? entry.icon
+                : '';
+            selectedPreset = (!inpIconUrl.value && entry && entry.icon) ? entry.icon : (selectedPreset || '⬚');
+            err.textContent = '';
+            setPreviewFromUrl(readIconValue());
         }
 
         function hideForm() {
-            formWrap.style.display = 'none';
+            formWrap.classList.remove('rpc-dpm-form-wrap--open');
+            panel.classList.remove('rpc-dpm-panel--editing');
             editingId = null;
-            errBox.textContent = '';
+            err.textContent = '';
         }
 
-        function showForm(entry) {
-            formWrap.style.display = 'block';
-            editingId = entry ? entry.id : null;
-            inpName.value = entry ? entry.name : '';
-            inpWork.value = entry ? entry.workPath : '';
-            inpExe.value = entry && entry.executable ? entry.executable : '';
-            inpIconUrl.value = '';
-            fileInput.value = '';
-            if (entry && entry.icon && (/^https?:\/\//i.test(entry.icon) || /^data:image\//i.test(entry.icon))) {
-                iconMode = 'url';
-                inpIconUrl.value = entry.icon;
-                setIconPreviewFromUrl(entry.icon);
-            } else {
-                iconMode = 'preset';
-                selectedPreset = (entry && entry.icon) ? entry.icon : '⬚';
-                if (PRESET_ICONS.indexOf(selectedPreset) < 0) selectedPreset = '⬚';
-                iconPreview.innerHTML = '';
-                iconPreview.textContent = selectedPreset;
+        function iconCell(icon) {
+            if (icon && (/^https?:\/\//i.test(icon) || /^data:image\//i.test(icon))) {
+                return '<img alt="" src="' + String(icon).replace(/"/g, '&quot;') + '"/>';
             }
-            errBox.textContent = '';
+            return String(icon || '⬚');
         }
 
         function renderList() {
-            listWrap.innerHTML = '';
-            var entries = getEntries();
+            var entries = window.__rpcDesktopAppStore.getState().processes.slice();
             if (!entries.length) {
-                var empty = doc.createElement('div');
-                empty.textContent = '暂无进程，请点击「添加进程」。';
-                empty.style.cssText = 'color:rgba(231,238,252,0.5);font-size:13px;padding:20px 8px;text-align:center;';
-                listWrap.appendChild(empty);
+                listWrap.innerHTML = '<div class="rpc-dpm-empty">暂无进程，请点击「添加」。</div>';
                 return;
             }
+            var html = '';
+            html += '<table class="rpc-dpm-table">';
+            html += '<thead><tr>';
+            html += '<th style="width:72px;">图标</th>';
+            html += '<th>名称</th>';
+            html += '<th>工作路径</th>';
+            html += '<th>工作节点名称</th>';
+            html += '<th style="width:120px;">操作</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
             entries.forEach(function (e) {
-                var card = doc.createElement('div');
-                card.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border-radius:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);';
+                html += '<tr data-id="' + String(e.id).replace(/"/g, '&quot;') + '">';
+                html += '<td><div class="rpc-dpm-table-icon">' + iconCell(e.icon) + '</div></td>';
+                html += '<td class="rpc-dpm-td-ellipsis" title="' + String(e.name).replace(/"/g, '&quot;') + '">' + String(e.name) + '</td>';
+                html += '<td class="rpc-dpm-td-ellipsis" title="' + String(e.workPath).replace(/"/g, '&quot;') + '">' + String(e.workPath) + '</td>';
+                html += '<td class="rpc-dpm-td-ellipsis" title="' + String(e.workNode).replace(/"/g, '&quot;') + '">' + String(e.workNode) + '</td>';
+                html += '<td><div class="rpc-dpm-td-actions">';
+                html += '<button type="button" class="rpc-dpm-inline-btn" data-act="edit">编辑</button>';
+                html += '<button type="button" class="rpc-dpm-inline-btn rpc-dpm-inline-btn--danger" data-act="del">删除</button>';
+                html += '</div></td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            listWrap.innerHTML = html;
 
-                var thumb = doc.createElement('div');
-                thumb.style.cssText = 'width:44px;height:44px;border-radius:10px;flex-shrink:0;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden;';
-                if (e.icon && (/^https?:\/\//i.test(e.icon) || /^data:image\//i.test(e.icon))) {
-                    var im = doc.createElement('img');
-                    im.src = e.icon;
-                    im.style.cssText = 'width:100%;height:100%;object-fit:cover;';
-                    im.onerror = function () { thumb.textContent = '⬚'; };
-                    thumb.appendChild(im);
-                } else {
-                    thumb.textContent = e.icon || '⬚';
-                }
-
-                var mid = doc.createElement('div');
-                mid.style.cssText = 'flex:1;min-width:0;';
-                var t = doc.createElement('div');
-                t.textContent = e.name;
-                t.style.cssText = 'font-weight:700;color:#e7eefc;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-                var p = doc.createElement('div');
-                p.textContent = e.workPath + (e.executable ? ' · ' + e.executable : '');
-                p.style.cssText = 'font-size:11px;color:rgba(231,238,252,0.55);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-                mid.appendChild(t);
-                mid.appendChild(p);
-
-                var actions = doc.createElement('div');
-                actions.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
-                var bEdit = doc.createElement('button');
-                bEdit.type = 'button';
-                bEdit.textContent = '编辑';
-                bEdit.style.cssText = 'padding:4px 10px;font-size:11px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:#1a2233;color:#cfe0ff;cursor:pointer;';
-                var bDel = doc.createElement('button');
-                bDel.type = 'button';
-                bDel.textContent = '删除';
-                bDel.style.cssText = 'padding:4px 10px;font-size:11px;border-radius:8px;border:1px solid rgba(255,100,100,0.35);background:rgba(50,20,20,0.6);color:#fcc;cursor:pointer;';
-                actions.appendChild(bEdit);
-                actions.appendChild(bDel);
-
-                bEdit.addEventListener('click', function () {
-                    showForm(e);
+            // bind actions
+            Array.from(listWrap.querySelectorAll('button[data-act]')).forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var tr = b.closest('tr');
+                    if (!tr) return;
+                    var id = tr.getAttribute('data-id');
+                    var list = window.__rpcDesktopAppStore.getState().processes.slice();
+                    var cur = list.find(function (x) { return x.id === id; });
+                    var act = b.getAttribute('data-act');
+                    if (act === 'edit' && cur) {
+                        showForm(cur);
+                        return;
+                    }
+                    if (act === 'del' && cur) {
+                        if (!window.confirm('确定删除「' + cur.name + '」？')) return;
+                        var next = list.filter(function (x) { return x.id !== id; });
+                        window.__rpcDesktopAppStore.setState({ processes: next });
+                        renderList();
+                        hideForm();
+                    }
                 });
-                bDel.addEventListener('click', function () {
-                    if (!window.confirm('确定删除「' + e.name + '」？')) return;
-                    var next = getEntries().filter(function (x) { return x.id !== e.id; });
-                    setEntriesAndRefresh(next);
-                    renderList();
-                    hideForm();
-                });
-
-                card.appendChild(thumb);
-                card.appendChild(mid);
-                card.appendChild(actions);
-                listWrap.appendChild(card);
             });
         }
 
-        btnAdd.addEventListener('click', function () {
-            showForm(null);
-        });
-
-        btnCancelForm.addEventListener('click', hideForm);
-
+        btnAdd.addEventListener('click', function () { showForm(null); });
+        btnCancel.addEventListener('click', hideForm);
         btnSave.addEventListener('click', function () {
-            errBox.textContent = '';
+            err.textContent = '';
             var name = inpName.value;
-            var en = validateName(name);
-            if (en) {
-                errBox.textContent = en;
+            var icon = readIconValue();
+            var workPath = inpWorkPath.value;
+            var workNode = inpWorkNode.value;
+            var e1 = validateName(name) || validateIcon(icon) || validateWorkPath(workPath) || validateWorkNode(workNode);
+            if (e1) {
+                err.textContent = e1;
                 return;
             }
-            var wp = inpWork.value;
-            var ew = validateWorkPath(wp);
-            if (ew) {
-                errBox.textContent = ew;
-                return;
-            }
-            var iconVal = readIconValue();
-            var exeOpt = inpExe.value.trim();
             var entry = normalizeEntry({
                 id: editingId || generateEntryId(),
-                name: name.trim(),
-                icon: iconVal || '⬚',
-                workPath: wp.trim(),
-                executable: exeOpt || undefined,
+                name: String(name).trim(),
+                icon: String(icon).trim(),
+                workPath: String(workPath).trim(),
+                workNode: String(workNode).trim(),
             });
-            var list = getEntries().slice();
+            var list = window.__rpcDesktopAppStore.getState().processes.slice();
             if (editingId) {
                 var ix = list.findIndex(function (x) { return x.id === editingId; });
                 if (ix >= 0) list[ix] = entry;
@@ -433,44 +397,54 @@
             } else {
                 list.push(entry);
             }
-            setEntriesAndRefresh(list);
+            window.__rpcDesktopAppStore.setState({ processes: list });
             renderList();
             hideForm();
         });
 
-        function openPanel() {
-            overlay.style.display = 'block';
-            requestAnimationFrame(function () {
-                overlay.style.opacity = '1';
-                panel.style.transform = 'translateX(0)';
-            });
+        function open() {
+            overlay.classList.add('rpc-dpm-overlay--visible');
+            panel.classList.add('rpc-dpm-panel--open');
             renderList();
             hideForm();
         }
-
-        function closePanel() {
-            overlay.style.opacity = '0';
-            panel.style.transform = 'translateX(100%)';
-            setTimeout(function () {
-                overlay.style.display = 'none';
-                hideForm();
-            }, 260);
+        function close() {
+            overlay.classList.remove('rpc-dpm-overlay--visible');
+            panel.classList.remove('rpc-dpm-panel--open');
+            hideForm();
         }
 
-        btnClose.addEventListener('click', closePanel);
-        overlay.addEventListener('click', closePanel);
+        btnClose.addEventListener('click', close);
+        overlay.addEventListener('click', close);
         panel.addEventListener('click', function (e) { e.stopPropagation(); });
 
-        return { open: openPanel, close: closePanel, refreshList: renderList };
+        // auto refresh
+        var unsub = window.__rpcDesktopAppStore.subscribe(function () {
+            renderList();
+        });
+
+        return { open: open, close: close, dispose: unsub, refreshList: renderList };
+    }
+
+    function loadEntries() {
+        return window.__rpcDesktopAppStore.getState().processes.slice();
+    }
+
+    function saveEntries(entries) {
+        window.__rpcDesktopAppStore.setState({ processes: entries.slice() });
     }
 
     window.__rpcDesktopProcessManager = {
-        STORAGE_KEY: STORAGE_KEY,
+        STORAGE_V2: STORAGE_V2,
+        STORAGE_V1: STORAGE_V1,
+        DEFAULT_ENTRIES: DEFAULT_ENTRIES.slice(),
         loadEntries: loadEntries,
         saveEntries: saveEntries,
-        resolveExePath: resolveExePath,
-        isProbablyRunnablePath: isProbablyRunnablePath,
         normalizeEntry: normalizeEntry,
+        validateName: validateName,
+        validateWorkPath: validateWorkPath,
+        validateWorkNode: validateWorkNode,
+        validateIcon: validateIcon,
         mountPanel: mountPanel,
         generateEntryId: generateEntryId,
     };

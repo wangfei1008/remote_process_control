@@ -571,7 +571,7 @@
 
             peer.addEventListener('connectionstatechange', function () {
                 const st = peer.connectionState;
-                if ((!session.rpcWindowMode && !session.electronCompactLauncher) || session.rpcAutoClosed) return;
+                if (!session.rpcWindowMode || session.rpcAutoClosed) return;
                 if (st === 'failed') {
                     if (!i.shouldDeferRpcShellCloseUntilVideo || !i.shouldDeferRpcShellCloseUntilVideo(session)) {
                         i.closeRpcShellOrWindow && i.closeRpcShellOrWindow(session, 'webrtc_connection_failed');
@@ -612,11 +612,9 @@
                     }
                 } catch (_) {}
                 /* 切勿对 audio 的 ontrack 写 video.srcObject，否则会覆盖掉已有视频轨（常见 SDP 顺序：先 video 后 audio） */
-                if (session.rpcWindowMode || session.electronCompactLauncher) {
+                if (session.rpcWindowMode) {
                     t.addEventListener('ended', function () {
-                        if (!i.shouldDeferRpcShellCloseUntilVideo || !i.shouldDeferRpcShellCloseUntilVideo(session)) {
-                            i.exitVideoPageAfterRemoteStreamEnded && i.exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'video_track_ended');
-                        }
+                        i.exitVideoPageAfterRemoteStreamEnded && i.exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'video_track_ended');
                     });
                 }
                 if (typeof t.getSettings === 'function') {
@@ -788,10 +786,8 @@
                 return waitGatheringComplete(peer);
             }).then(function () {
                 const answer = peer.localDescription;
-                const answerEl = doc.getElementById('answer-sdp');
-                if (answerEl) answerEl.textContent = answer.sdp;
                 session.websocket.send(JSON.stringify({
-                    id: 'server', type: answer.type, sdp: answer.sdp,
+                    id: (session && session.rpcWorkNode) ? session.rpcWorkNode : 'server', type: answer.type, sdp: answer.sdp,
                 }));
             });
         }

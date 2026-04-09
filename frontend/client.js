@@ -4,6 +4,16 @@
 (function () {
     'use strict';
 
+    function getTargetWorkNodeId() {
+        try {
+            var qs = new URLSearchParams(window.location.search);
+            var v = String(qs.get('workNode') || '').trim();
+            // workNode 约束：1–30 字符；不满足则回退 server
+            if (v && v.length >= 1 && v.length <= 30) return v;
+        } catch (_) {}
+        return 'server';
+    }
+
     function createSession() {
         return {
             clientId: window.__rpcRandomId(10),
@@ -17,6 +27,8 @@
             isControlEnabled: false,
             /** rpcWindow mode: pass exePath via URL to auto-start the remote app. */
             rpcExePath: null,
+            /** 目标工作节点（用于信令路由 id，替代硬编码 "server"） */
+            rpcWorkNode: 'server',
             /** 独立窗口/应用模式：隐藏网页控制台，仅全屏远程画面（由 URL ?rpcWindow=1 开启） */
             rpcWindowMode: false,
             /** WebSocket 连通后自动 Start（应用模式默认 true，可用 autostart=0 关闭） */
@@ -32,16 +44,13 @@
             rpcPcDisconnectTimer: null,
             rpcVideoPageOpenedAt: 0,
             rpcVideoLastAliveAt: 0,
-            /** Electron 紧凑启动：先只显示记事本磁贴，双击后再进视频；与 rpcWindow 可并存 */
-            electronCompactLauncher: false,
-            electronVideoOpen: false,
             /** 远端进程结束/视频轨已断后已执行退出画面，避免重复 stop */
             rpcRemoteStreamExitHandled: false,
         };
     }
 
     function rpcShellCloseAllowed(session) {
-        return session.rpcWindowMode || session.electronCompactLauncher;
+        return session.rpcWindowMode;
     }
 
     function clearSessionTimer(session, key) {
@@ -58,7 +67,8 @@
      * 仅依赖「无视频超时」；出画后恢复对断流、关 track 等的自动关窗。
      */
     function shouldDeferRpcShellCloseUntilVideo(session) {
-        return !!(session.electronCompactLauncher && !session.rpcHadVideo);
+        void session;
+        return false;
     }
 
     /** 应用模式下自动关窗（Electron 关进程；浏览器尝试 window.close） */
@@ -118,10 +128,6 @@
             if (stg) stg.__rpc_stage_mouse_bound = false;
             session.activeVideo = null;
             session.rpcHadVideo = false;
-            const startBtn = doc.getElementById('start');
-            const stopBtn = doc.getElementById('stop');
-            if (startBtn) startBtn.disabled = false;
-            if (stopBtn) stopBtn.disabled = true;
             if (ui) logDataChannel(ui, '远端已无视频流，已退出画面（' + reason + '）');
         }
     }
@@ -174,7 +180,7 @@
     }
 
     function armRpcWebSocketConnectWatchdog(session) {
-        if ((!session.rpcWindowMode && !session.electronCompactLauncher) || session.rpcAutoClosed) return;
+        if (!session.rpcWindowMode || session.rpcAutoClosed) return;
         clearSessionTimer(session, 'rpcWsConnectTimer');
         const wsMs = Math.max(3000, Number(session.rpcWsConnectTimeoutMs) || 45000);
         session.rpcWsConnectTimer = setTimeout(function () {
@@ -203,6 +209,7 @@
         }
         session.rpcWindowMode = rpcWindow;
         session.rpcAutostart = rpcAutostart;
+        session.rpcWorkNode = getTargetWorkNodeId();
         if (rpcWindow) {
             const tmo = parseInt(params.get('rpcVideoTimeoutMs') || '60000', 10);
             session.rpcVideoTimeoutMs = !isNaN(tmo) && tmo >= 3000 ? tmo : 60000;
@@ -211,8 +218,6 @@
             const exePathParam = params.get('exePath');
             if (exePathParam && String(exePathParam).trim() !== '') {
                 session.rpcExePath = exePathParam;
-                const exeEl = doc.getElementById('exe-path');
-                if (exeEl) exeEl.value = exePathParam;
             }
         }
 
@@ -236,81 +241,25 @@
         if (splash) splash.hidden = false;
     }
 
-    /**
-     * Electron（preload 注入 isElectron）：默认 electronCompact=1、autostart=0，先只显示记事本磁贴，双击再连接。
-     * 无边框窗口由 Electron main 的 frame:false 实现。
-     */
-    function applyElectronShellFlags(session, doc) {
-        if (!window.rpcShell || !window.rpcShell.isElectron) return;
-        const params = new URLSearchParams(window.location.search);
-        if (params.get('electronCompact') === '0') return;
-        session.electronCompactLauncher = true;
-        doc.documentElement.classList.add('electron-compact-launcher', 'electron-frameless');
-        if (!session.rpcWindowMode) {
-            if (params.get('autostart') === '1') {
-                session.rpcAutostart = true;
-            } else if (params.get('autostart') === '0') {
-                session.rpcAutostart = false;
-            } else {
-                session.rpcAutostart = false;
-            }
-            if (!params.get('windowTitle')) {
-                doc.title = '远程应用';
-            }
-        }
-        /* 双击后再连：默认 60s 内须出画；信令未连上仍维持短超时（可用 URL 覆盖） */
-        const vtParam = params.get('rpcVideoTimeoutMs');
-        if (vtParam != null && String(vtParam).trim() !== '') {
-            const vt = parseInt(vtParam, 10);
-            if (!isNaN(vt) && vt >= 3000) session.rpcVideoTimeoutMs = vt;
-        } else {
-            session.rpcVideoTimeoutMs = 60000;
-        }
-        const wtParam = params.get('rpcWsConnectTimeoutMs');
-        if (wtParam != null && String(wtParam).trim() !== '') {
-            const wt = parseInt(wtParam, 10);
-            if (!isNaN(wt) && wt >= 3000) session.rpcWsConnectTimeoutMs = wt;
-        } else {
-            session.rpcWsConnectTimeoutMs = 10000;
-        }
-    }
-
     function bindStatusElements(doc) {
-        return {
-            iceConnectionState: doc.getElementById('ice-connection-state'),
-            iceGatheringState: doc.getElementById('ice-gathering-state'),
-            signalingState: doc.getElementById('signaling-state'),
-            dataChannelState: doc.getElementById('data-channel-state'),
-            dataChannelLog: doc.getElementById('data-channel-log'),
-            websocketState: doc.getElementById('websocket-state'),
-            websocketIndicator: doc.getElementById('websocket-indicator'),
-            iceConnectionIndicator: doc.getElementById('ice-connection-indicator'),
-            dataChannelIndicator: doc.getElementById('data-channel-indicator'),
-            captureHealthState: doc.getElementById('capture-health-state'),
-        };
+        // 经典单页 UI 已移除：保留一个最小对象，避免调用方空指针。
+        void doc;
+        return {};
     }
 
     function logDataChannel(ui, message) {
-        if (!ui || !ui.dataChannelLog) return;
-        const timestamp = new Date().toLocaleTimeString();
-        ui.dataChannelLog.textContent += '[' + timestamp + '] ' + message + '\n';
-        ui.dataChannelLog.scrollTop = ui.dataChannelLog.scrollHeight;
+        void ui;
+        console.info('[rpc]', message);
     }
 
     function updateWebSocketState(ui, state) {
-        if (!ui) return;
-        if (ui.websocketState) ui.websocketState.textContent = state;
-        if (ui.websocketIndicator) {
-            ui.websocketIndicator.className = 'status-indicator ' + (state === 'connected' ? 'active' : '');
-        }
+        void ui;
+        console.info('[rpc] websocket:', state);
     }
 
     function updateDataChannelState(ui, state) {
-        if (!ui) return;
-        if (ui.dataChannelState) ui.dataChannelState.textContent = state;
-        if (ui.dataChannelIndicator) {
-            ui.dataChannelIndicator.className = 'status-indicator ' + (state === 'open' ? 'active' : '');
-        }
+        void ui;
+        console.info('[rpc] datachannel:', state);
     }
 
     function getMainVideo(doc) {
@@ -443,25 +392,20 @@
     }
 
     RemoteProcessApplication.prototype.sendRequest = function () {
-        const exeEl = this.doc.getElementById('exe-path');
-        const exePath = (this.session && this.session.rpcExePath) ? String(this.session.rpcExePath).trim()
-            : ((exeEl && exeEl.value) ? exeEl.value.trim() : '');
+        const exePath = (this.session && this.session.rpcExePath) ? String(this.session.rpcExePath).trim() : '';
         if (!exePath) {
             logDataChannel(this.ui || bindStatusElements(this.doc), 'exePath 为空，无法启动远端应用');
             return;
         }
-        this.session.websocket.send(JSON.stringify({ id: 'server', type: 'request', exePath: exePath }));
+        this.session.websocket.send(JSON.stringify({ id: this.session.rpcWorkNode || 'server', type: 'request', exePath: exePath }));
     };
 
     RemoteProcessApplication.prototype.sendStopRequest = function () {
         if (!this.session.websocket || this.session.websocket.readyState !== WebSocket.OPEN) return;
-        const policyEl = this.doc.getElementById('stop-policy');
-        const policy = policyEl ? policyEl.value : 'close_process';
-        const idleEl = this.doc.getElementById('idle-seconds');
-        const idleRaw = (idleEl && idleEl.value) || '10';
-        const idleSeconds = Math.max(0, parseInt(String(idleRaw).trim(), 10) || 0);
+        const policy = 'close_process';
+        const idleSeconds = 10;
         this.session.websocket.send(JSON.stringify({
-            id: 'server', type: 'stop',
+            id: this.session.rpcWorkNode || 'server', type: 'stop',
             closeProcess: policy === 'close_process',
             autoClose: policy === 'auto_close',
             idleSeconds: idleSeconds,
@@ -471,26 +415,15 @@
     RemoteProcessApplication.prototype.start = function () {
         this.session.rpcRemoteStreamExitHandled = false;
         showVideoStage(this.session, this.doc);
-        const startBtn = this.doc.getElementById('start');
-        const stopBtn = this.doc.getElementById('stop');
-        if (startBtn) startBtn.disabled = true;
-        if (stopBtn) stopBtn.disabled = false;
         this.sendRequest();
         logDataChannel(this.ui, 'Connection started');
         this.session.rpcHadVideo = false;
         this.session.rpcVideoLastAliveAt = 0;
         armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
-        if (this.session.electronCompactLauncher && !this.session.rpcAutostart) {
-            armRpcWebSocketConnectWatchdog(this.session);
-        }
     };
 
     RemoteProcessApplication.prototype.stop = function () {
         this.sendStopRequest();
-        const startBtn = this.doc.getElementById('start');
-        const stopBtn = this.doc.getElementById('stop');
-        if (startBtn) startBtn.disabled = false;
-        if (stopBtn) stopBtn.disabled = true;
         hideVideoStage(this.doc);
         const v = getMainVideo(this.doc);
         if (v) {
@@ -516,17 +449,8 @@
             this.session.pc.close();
             this.session.pc = null;
         }
-        if (this.ui) {
-            if (this.ui.iceConnectionIndicator) this.ui.iceConnectionIndicator.className = 'status-indicator';
-            if (this.ui.dataChannelIndicator) this.ui.dataChannelIndicator.className = 'status-indicator';
-            logDataChannel(this.ui, 'Connection stopped');
-        }
+        if (this.ui) logDataChannel(this.ui, 'Connection stopped');
         this.session.isControlEnabled = false;
-        this.session.electronVideoOpen = false;
-        this.doc.documentElement.classList.remove('electron-video-active');
-        if (this.session.electronCompactLauncher && !this.session.rpcWindowMode) {
-            this.doc.documentElement.classList.remove('rpc-window-mode');
-        }
         if (this.session.latencyDiag) {
             this.session.latencyDiag.dispose();
         }
@@ -536,77 +460,10 @@
         this.session.rpcRemoteStreamExitHandled = false;
     };
 
-    RemoteProcessApplication.prototype.onLaunchTileDoubleClick = function () {
-        if (!this.session.websocket || this.session.websocket.readyState !== WebSocket.OPEN) {
-            logDataChannel(this.ui || bindStatusElements(this.doc), '请先等待 WebSocket 连接成功');
-            return;
-        }
-        if (!this.session.pc) {
-            this.start();
-        } else {
-            showVideoStage(this.session, this.doc);
-            armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
-            if (this.webrtc) this.webrtc.reattachVideoToMain();
-        }
-    };
-
-    /** 将磁贴 data-rpc-exe 写入 exe-path 后执行与双击磁贴相同的连接逻辑 */
-    RemoteProcessApplication.prototype.applyTileExeAndLaunch = function (tileEl) {
-        if (!tileEl) return;
-        const path = tileEl.getAttribute('data-rpc-exe');
-        const exeEl = this.doc.getElementById('exe-path');
-        if (path && exeEl) exeEl.value = path;
-        this.onLaunchTileDoubleClick();
-    };
-
     RemoteProcessApplication.prototype.bindDom = function () {
         const doc = this.doc;
         const self = this;
         this.session.activeVideo = getMainVideo(doc);
-
-        const enableRc = doc.getElementById('enable-remote-control');
-        if (enableRc) {
-            enableRc.addEventListener('change', function (e) {
-                self.session.remoteControlEnabled = e.target.checked;
-                logDataChannel(self.ui, 'Remote control ' + (self.session.remoteControlEnabled ? 'enabled' : 'disabled'));
-            });
-        }
-
-        const stopPolicy = doc.getElementById('stop-policy');
-        if (stopPolicy) {
-            stopPolicy.addEventListener('change', function (e) {
-                const row = doc.getElementById('idle-seconds-row');
-                if (row) row.style.display = e.target.value === 'auto_close' ? 'flex' : 'none';
-            });
-        }
-
-        const toggleExe = doc.getElementById('toggle-exe-details');
-        if (toggleExe) {
-            toggleExe.addEventListener('click', function () {
-                const panel = doc.getElementById('exe-details-panel');
-                if (!panel) return;
-                const open = panel.style.display !== 'none';
-                panel.style.display = open ? 'none' : 'block';
-            });
-        }
-
-        doc.querySelectorAll('.app-launch-tile[data-rpc-exe]').forEach(function (tile) {
-            tile.addEventListener('dblclick', function (e) {
-                e.preventDefault();
-                self.applyTileExeAndLaunch(tile);
-            });
-            tile.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    self.applyTileExeAndLaunch(tile);
-                }
-            });
-        });
-
-        const startBtn = doc.getElementById('start');
-        if (startBtn) startBtn.addEventListener('click', function () { self.start(); });
-        const stopBtnEl = doc.getElementById('stop');
-        if (stopBtnEl) stopBtnEl.addEventListener('click', function () { self.stop(); });
 
         const closeStage = doc.getElementById('video-stage-close');
         if (closeStage) {
@@ -639,16 +496,6 @@
         });
 
         doc.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape' && self.session.electronCompactLauncher) {
-                const st0 = getVideoStage(doc);
-                if (!st0 || st0.hidden) {
-                    e.preventDefault();
-                    if (window.rpcShell && typeof window.rpcShell.close === 'function') {
-                        window.rpcShell.close();
-                    }
-                    return;
-                }
-            }
             const st = getVideoStage(doc);
             if (!st || st.hidden) return;
             if (e.key === 'Escape') {
@@ -663,7 +510,6 @@
             }
         });
 
-        if (stopBtnEl) stopBtnEl.disabled = true;
         window.addEventListener('beforeunload', function () { hideVideoStage(doc); });
     };
 
@@ -718,12 +564,7 @@
                 armRpcNoVideoWatchdog(this.session, this.doc, this.ui);
             }
         }
-        /* 紧凑模式且手动双击再连：勿在启动页就开始「信令 10s 未连上关窗」，改到 start() 再计时 */
-        const deferWsWatchdog =
-            this.session.electronCompactLauncher && !this.session.rpcAutostart;
-        if ((this.session.rpcWindowMode || this.session.electronCompactLauncher) && !deferWsWatchdog) {
-            armRpcWebSocketConnectWatchdog(this.session);
-        }
+        if (this.session.rpcWindowMode) armRpcWebSocketConnectWatchdog(this.session);
         const connectSignaling = function () {
             self.signaling.connect();
         };
@@ -754,11 +595,9 @@
         try {
             const params = new URLSearchParams(window.location.search);
             const rpcWindow = params.get('rpcWindow') === '1' || params.get('kiosk') === '1';
-            const useLegacyUi = params.get('rpcLegacy') === '1' || params.get('desktop') === '0';
-            if (rpcWindow || useLegacyUi) {
+            if (rpcWindow) {
                 const app = new RemoteProcessApplication(document);
                 applyRpcWindowUrlFlags(app.session, document);
-                applyElectronShellFlags(app.session, document);
                 window.__rpcApp = app;
                 app.run();
             } else {
@@ -766,10 +605,6 @@
             }
         } catch (err) {
             console.error('[RemoteProcessControl] 启动失败:', err);
-            const pre = document.getElementById('data-channel-log');
-            if (pre) {
-                pre.textContent += '\n[错误] 前端脚本无法启动: ' + (err && err.message ? err.message : err) + '\n';
-            }
         }
     }
 
