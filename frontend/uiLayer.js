@@ -305,15 +305,19 @@
         if (!w || !h) return;
         try {
             if (window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
+                const fw = Number(videoEl.__rpc_forced_w || 0);
+                const fh = Number(videoEl.__rpc_forced_h || 0);
                 logResolutionDecision(videoEl, 'postMessage', {
                     w: w, h: h,
-                    fw: Number(videoEl.__rpc_forced_w || 0), fh: Number(videoEl.__rpc_forced_h || 0),
+                    fw: fw, fh: fh,
                     vw: Number(videoEl.videoWidth || 0), vh: Number(videoEl.videoHeight || 0),
                 });
                 window.parent.postMessage({
                     type: 'rpc_video_resolution',
                     width: w,
                     height: h,
+                    forcedWidth: fw,
+                    forcedHeight: fh,
                 }, '*');
             }
         } catch (_) {}

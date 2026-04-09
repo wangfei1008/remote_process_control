@@ -14,6 +14,8 @@
 #include "session/process_lifecycle.h"
 #include "session/session_health_policy.h"
 
+#include "app/runtime_config.h"
+
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -52,6 +54,14 @@ remote_video_engine::remote_video_engine(std::string exe_path, std::function<voi
     m_window_missing_exit_grace_ms = 5000;
     m_video_fps = 30;
     m_video_encode_pipeline->configure(m_video_fps, m_encoder_layout_change_threshold_px, m_encoder_layout_change_required_streak);
+
+    // 运行时开关（便于对付 DXGI 空帧 / 窗口特殊渲染如 MATLAB）
+    // - RPC_LOCK_CAPTURE_BACKEND=1/0：默认 1（保持现状）。设为 0 可允许 DXGI 失败时回退到 GDI。
+    // - RPC_CAPTURE_ALL_WINDOWS=1/0：默认 0。设为 1 则改为采集当前进程的“所有窗口拼图”（用于诊断/兜底）。
+    m_lock_capture_backend = runtime_config::get_bool("RPC_LOCK_CAPTURE_BACKEND", true);
+    m_capture_all_windows = runtime_config::get_bool("RPC_CAPTURE_ALL_WINDOWS", false);
+    std::cout << "[capture] settings lock_backend=" << (m_lock_capture_backend ? 1 : 0)
+              << " capture_all_windows=" << (m_capture_all_windows ? 1 : 0) << "\n";
 }
 
 remote_video_engine::~remote_video_engine()

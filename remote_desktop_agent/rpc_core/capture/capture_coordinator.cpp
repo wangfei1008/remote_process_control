@@ -17,6 +17,9 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
 {
     CaptureGrabOutcome outcome;
 
+    // 入口策略：
+    // - use_hw_capture=true 走 DXGI（硬件/桌面复制）优先；失败时可按 lock_capture_backend 决定是否回退 GDI。
+    // - capture_all_windows=true 时，为了“采集稳定与可控”，统一走 GDI 的窗口枚举/拼图逻辑（DXGI 路径仅针对单窗口）。
     if (use_hw_capture) {
         if (capture_all_windows) {
             outcome.used_hw_capture = false;
@@ -26,14 +29,15 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
             return outcome;
         }
 
-        outcome.frame = dxgi_capture.capture_window_rgb(
-            main_window, outcome.width, outcome.height, outcome.cap_min_left, outcome.cap_min_top);
+        // 1) DXGI 采集主窗口：成功则直接返回
+        outcome.frame = dxgi_capture.capture_window_rgb(main_window, outcome.width, outcome.height, outcome.cap_min_left, outcome.cap_min_top);
         if (!outcome.frame.empty()) {
             outcome.used_hw_capture = true;
             capture_backend_state.on_dxgi_success();
             return outcome;
         }
 
+        // 2) DXGI 返回空帧：交给状态机判断是否需要 reset duplication
         bool should_reset_duplication = false;
         capture_backend_state.on_dxgi_empty(rpc_unix_epoch_ms(), should_reset_duplication);
         if (should_reset_duplication) {
@@ -41,6 +45,7 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
             std::cout << "[capture] dxgi repeated empty, reset duplication\n";
         }
 
+        // DXGI 空帧可能持续出现（最小化/遮挡/DWM/权限/特殊渲染等），这里做节流打印，避免刷屏。
         static auto s_last_dxgi_fail_log = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         if (now - s_last_dxgi_fail_log > std::chrono::seconds(1)) {
@@ -48,6 +53,9 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
             std::cout << "[capture] dxgi returned empty\n";
         }
 
+        // 3) 是否允许回退：
+        // - lock_capture_backend=true：坚持 DXGI（由上层状态机决定何时切换），这里不主动回退，避免“前端看似恢复但输入映射/采集目标抖动”。
+        // - lock_capture_backend=false：允许使用 GDI 作为兜底（但仍不自动升级到 all-windows，避免误采集无关窗口）。
         if (!lock_capture_backend) {
             outcome.frame = WindowFrameGrabber::capture_main_window_image(
                 gdi_capture, main_window, outcome.width, outcome.height,
@@ -62,6 +70,7 @@ CaptureGrabOutcome CaptureCoordinator::grab_rgb_frame(bool use_hw_capture,
         return outcome;
     }
 
+    // use_hw_capture=false：明确走 GDI。
     if (capture_all_windows) {
         outcome.used_hw_capture = false;
         outcome.frame = WindowFrameGrabber::capture_all_windows_image(

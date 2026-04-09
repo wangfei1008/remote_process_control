@@ -843,9 +843,16 @@
                 const data = event.data;
                 if (!data || !data.type) return;
                 if (data.type === 'rpc_video_resolution') {
+                    const w0 = Number(data.width || 0);
+                    const h0 = Number(data.height || 0);
+                    const fw = Number(data.forcedWidth || 0);
+                    const fh = Number(data.forcedHeight || 0);
+                    // 优先使用后端通过 DC 上报的 forced 分辨率，保证分辨率变更时窗口能及时跟随。
+                    const useW = (fw > 0 && fh > 0) ? fw : w0;
+                    const useH = (fw > 0 && fh > 0) ? fh : h0;
                     console.info('[rpc-res][desktop] got child postMessage resolution='
-                        + Number(data.width || 0) + 'x' + Number(data.height || 0));
-                    fitWindowToVideoResolution(data.width, data.height);
+                        + w0 + 'x' + h0 + (fw > 0 && fh > 0 ? (' forced=' + fw + 'x' + fh) : ''));
+                    fitWindowToVideoResolution(useW, useH);
                     return;
                 }
                 if (data.type === 'rpc_request_close') {
