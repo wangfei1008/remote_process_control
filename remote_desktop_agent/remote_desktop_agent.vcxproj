@@ -118,6 +118,10 @@
     <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(IncludePath)</IncludePath>
     <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Release;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -144,7 +148,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;datachannel.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;datachannel.lib;ws2_32.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
