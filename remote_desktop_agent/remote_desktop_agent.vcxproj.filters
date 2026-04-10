@@ -84,7 +84,13 @@
     <ClCompile Include="rpc_core\capture\capture_backend_state.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_coordinator.cpp">
+    <ClCompile Include="rpc_core\capture\process_surface_enumerator.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\process_ui_capture.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\window_visibility_diagnostics.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp">
@@ -194,7 +200,16 @@
     <ClInclude Include="rpc_core\capture\capture_backend_state.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_coordinator.h">
+    <ClInclude Include="rpc_core\capture\capture_grab_outcome.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\process_surface_enumerator.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\process_ui_capture.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\window_visibility_diagnostics.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_discard_policy.h">

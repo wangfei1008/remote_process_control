@@ -20,6 +20,7 @@ public:
     remote_desktop_media_session(std::string exe_path,
                                    runtime_settings stream_settings,
                                    std::function<void()> on_remote_process_exit,
+                                   std::function<void(const char* why, uint64_t missing_ms)> on_window_missing,
                                    std::function<void()> stop_if_no_clients);
     ~remote_desktop_media_session();
 
@@ -43,6 +44,7 @@ private:
     std::weak_ptr<ClientPeerConnection> m_client_peer;
 
     std::function<void()> m_on_remote_process_exit;
+    std::function<void(const char* why, uint64_t missing_ms)> m_on_window_missing;
     std::function<void()> m_stop_if_no_clients;
 
     std::unique_ptr<remote_desktop_media_session_impl> m_impl;

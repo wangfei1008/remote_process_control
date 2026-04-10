@@ -15,14 +15,5 @@ public:
                                                           int& out_min_left,
                                                           int& out_min_top,
                                                           bool include_non_client);
-
-    static std::vector<uint8_t> capture_all_windows_image(GdiCapture& gdi_capture,
-                                                          DWORD pid,
-                                                          HWND anchor_hwnd,
-                                                          int max_below_main_px,
-                                                          int& out_width,
-                                                          int& out_height,
-                                                          int& out_min_left,
-                                                          int& out_min_top);
 };
 

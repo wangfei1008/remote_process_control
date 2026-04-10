@@ -76,8 +76,7 @@ bool RemoteProcessSession::launch_process(const std::string& exe_path,
                                           HWND& out_main_window,
                                           std::string& out_target_exe_base_name)
 {
-    if (!process_lifecycle::launch_process(
-            exe_path, out_process_info, out_launch_pid, out_capture_pid, out_target_exe_base_name)) {
+    if (!process_lifecycle::launch_process(exe_path, out_process_info, out_launch_pid, out_capture_pid, out_target_exe_base_name)) {
         return false;
     }
 

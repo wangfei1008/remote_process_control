@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 DXGICapture::DXGICapture()
 {
@@ -189,17 +190,37 @@ bool DXGICapture::acquire_desktop_frame()
     return true;
 }
 
-std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop)
+bool DXGICapture::window_center_on_current_output(HWND hwnd) const
+{
+    if (!hwnd || !IsWindow(hwnd)) return false;
+    RECT wr{};
+    if (!window_rect_utils::get_effective_window_rect(hwnd, wr)) return false;
+    const LONG cx = (wr.left + wr.right) / 2;
+    const LONG cy = (wr.top + wr.bottom) / 2;
+    return cx >= m_output_rect.left && cx < m_output_rect.right && cy >= m_output_rect.top && cy < m_output_rect.bottom;
+}
+
+bool DXGICapture::begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds)
+{
+    if (!m_available || hwnds.empty()) return false;
+    for (HWND h : hwnds) {
+        if (!h || !IsWindow(h)) return false;
+    }
+    if (!ensure_output_for_window(hwnds[0])) return false;
+    for (size_t i = 1; i < hwnds.size(); ++i) {
+        if (!window_center_on_current_output(hwnds[i])) return false;
+    }
+    return acquire_desktop_frame();
+}
+
+std::vector<uint8_t> DXGICapture::copy_acquired_window_to_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop)
 {
     outWidth = 0;
     outHeight = 0;
     outLeft = 0;
     outTop = 0;
-    if (!m_available || !hwnd || !IsWindow(hwnd)) return {};
-    if (!ensure_output_for_window(hwnd)) return {};
+    if (!m_available || !hwnd || !IsWindow(hwnd) || !m_last_desktop_frame) return {};
 
-    // 使用窗口矩形（含标题栏/边框等非客户区），
-    // 使 DXGI 与 GDI 采集区域定义保持一致。
     RECT winRc{};
     if (!window_rect_utils::get_effective_window_rect(hwnd, winRc)) return {};
 
@@ -220,9 +241,7 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     h &= ~1;
     if (w <= 0 || h <= 0) return {};
 
-    if (!acquire_desktop_frame()) return {};
     if (!ensure_staging_texture(w, h)) {
-        m_duplication->ReleaseFrame();
         return {};
     }
 
@@ -239,7 +258,6 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     D3D11_MAPPED_SUBRESOURCE mapped{};
     HRESULT hr = m_context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) {
-        m_duplication->ReleaseFrame();
         return {};
     }
 
@@ -258,12 +276,33 @@ std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, i
     }
 
     m_context->Unmap(m_staging.Get(), 0);
-    m_duplication->ReleaseFrame();
 
     outWidth = w;
     outHeight = h;
     outLeft = clipped.left;
     outTop = clipped.top;
+    return rgb;
+}
+
+void DXGICapture::end_desktop_capture()
+{
+    if (m_duplication && m_last_desktop_frame) {
+        m_duplication->ReleaseFrame();
+    }
+    m_last_desktop_frame.Reset();
+}
+
+std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop)
+{
+    outWidth = 0;
+    outHeight = 0;
+    outLeft = 0;
+    outTop = 0;
+    if (!m_available || !hwnd || !IsWindow(hwnd)) return {};
+    const std::vector<HWND> one{hwnd};
+    if (!begin_multiwindow_desktop_capture(one)) return {};
+    std::vector<uint8_t> rgb = copy_acquired_window_to_rgb(hwnd, outWidth, outHeight, outLeft, outTop);
+    end_desktop_capture();
     return rgb;
 }
 

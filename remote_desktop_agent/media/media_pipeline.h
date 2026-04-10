@@ -29,6 +29,7 @@ public:
 
     std::shared_ptr<remote_desktop_media_session> get_or_create_media_session(
         std::function<void()> on_remote_process_exit,
+        std::function<void(const char* why, uint64_t missing_ms)> on_window_missing,
         std::function<void()> stop_if_no_clients);
 
     void stop_media_session();

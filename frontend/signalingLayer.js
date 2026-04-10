@@ -25,6 +25,10 @@
         const shouldDeferRpcShellCloseUntilVideo = internal.shouldDeferRpcShellCloseUntilVideo;
         const closeRpcShellOrWindow = internal.closeRpcShellOrWindow;
 
+        function nowTs() {
+            try { return new Date().toISOString(); } catch (_) { return String(Date.now()); }
+        }
+
         function connect() {
             try {
                 const wsUrl = buildSignalingWebSocketUrl(session.clientId);
@@ -65,6 +69,7 @@
                 };
 
                 session.websocket.onerror = function () {
+                    console.warn('[rpc] websocket: error ts=' + nowTs() + ' clientId=' + session.clientId);
                     if (logDataChannel) {
                         logDataChannel(ui, 'WebSocket 错误（请确认信令服务已监听 9090，且 HTTPS 页面需使用 WSS 或改为 HTTP 打开前端）');
                     }
@@ -79,6 +84,11 @@
                 };
 
                 session.websocket.onclose = function (ev) {
+                    console.warn('[rpc] websocket: closed ts=' + nowTs()
+                        + ' clientId=' + session.clientId
+                        + ' code=' + ev.code
+                        + ' wasClean=' + (ev.wasClean ? 1 : 0)
+                        + (ev.reason ? (' reason=' + ev.reason) : ''));
                     if (logDataChannel) {
                         logDataChannel(ui, 'WebSocket closed (code=' + ev.code + (ev.reason ? ', ' + ev.reason : '') + ')');
                     }

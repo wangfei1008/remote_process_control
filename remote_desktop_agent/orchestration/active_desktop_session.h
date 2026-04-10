@@ -20,6 +20,7 @@
 #include "media/media_pipeline.h"
 #include "transport/remote_file_transfer_controller.h"
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -31,6 +32,11 @@ public:
     ~active_desktop_session();
 
     void wire_components(const desktop_session_create_params& params);
+    // Recreate operator_channel for the same session (reconnect) without restarting remote process.
+    void reconnect_operator(const desktop_session_create_params& params);
+    // When operator connection is lost, keep media/process alive for a grace period.
+    void begin_disconnect_grace();
+    void end_disconnect_grace();
     void teardown();
 
     void apply_remote_answer(const std::string& sdp_text);
@@ -39,10 +45,13 @@ private:
     friend class desktop_session_factory;
     active_desktop_session() = default;
 
+    void create_or_replace_operator_channel(const desktop_session_create_params& params);
     std::shared_ptr<remote_desktop_media_session> create_media_session_for_peer();
     void handle_remote_process_exit();
+    void on_remote_window_missing(const char* why, uint64_t missing_ms);
     void on_stop_if_no_clients_sample();
     void broadcast_remote_process_exited();
+    void broadcast_remote_window_missing(const char* why, uint64_t missing_ms);
 
     const runtime_settings* m_settings = nullptr;
     std::string m_client_id;
@@ -55,4 +64,12 @@ private:
     std::unique_ptr<media_pipeline> m_media;
     std::shared_ptr<operator_channel> m_operator;
     bool m_torn_down = false;
+    bool m_allow_stop_media_if_no_clients = true;
+
+    std::chrono::steady_clock::time_point m_last_peer_seen = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point m_last_stop_check_log = std::chrono::steady_clock::now();
+    bool m_stop_called = false;
+    uint32_t m_no_client_grace_ms = 60000;
+
+    std::chrono::steady_clock::time_point m_last_window_missing_log = std::chrono::steady_clock::now();
 };

@@ -19,6 +19,34 @@ remote_desktop_media_sender::remote_desktop_media_sender(uint64_t frame_mark_int
 {
 }
 
+void remote_desktop_media_sender::maybe_stop_if_no_clients(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (!clients.empty()) {
+        m_last_client_seen = now;
+        m_stop_called = false;
+        return;
+    }
+
+    if (!m_stop_if_no_clients) return;
+    if (m_stop_called) return;
+
+    const auto elapsed_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_client_seen).count());
+
+    // Log at most once every 5 seconds to avoid spam.
+    if (now - m_last_stop_check_log >= std::chrono::seconds(5)) {
+        m_last_stop_check_log = now;
+        std::cout << "[media] no clients seen for " << elapsed_ms << "ms (grace=" << m_no_client_grace_ms << "ms)\n";
+    }
+
+    if (elapsed_ms < m_no_client_grace_ms) return;
+
+    m_stop_called = true;
+    std::cout << "[media] no-client grace expired, stopping media session\n";
+    m_stop_if_no_clients();
+}
+
 void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
                                                    const rtc::binary& video_sample,
                                                    const remote_capture_telemetry& telemetry)
@@ -31,8 +59,8 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
     // 2) RTP 视频帧
     send_media_frames(true, video_sample, video_sample_time_us, clients);
 
-    // 3) stop_if_no_clients（保持原行为：每次 on_* 后检查）
-    if (m_stop_if_no_clients) m_stop_if_no_clients();
+    // 3) stop_if_no_clients（仅当无客户端持续超过宽限）
+    maybe_stop_if_no_clients(clients);
 }
 
 void remote_desktop_media_sender::on_audio_sample(uint64_t audio_sample_time_us,
@@ -42,7 +70,7 @@ void remote_desktop_media_sender::on_audio_sample(uint64_t audio_sample_time_us,
 
     send_media_frames(false, audio_sample, audio_sample_time_us, clients);
 
-    if (m_stop_if_no_clients) m_stop_if_no_clients();
+    maybe_stop_if_no_clients(clients);
 }
 
 void remote_desktop_media_sender::send_video_control_messages(

@@ -27,6 +27,7 @@
 
 #include <memory>
 #include <string>
+#include <atomic>
 
 class session_director : public signaling_observer {
 public:
@@ -39,6 +40,7 @@ private:
     void replace_with_new_session(const std::string& client_id, const std::string& exe_path, bool media_enabled);
     void teardown_active();
     void on_operator_connection_lost();
+    void cancel_pending_disconnect_teardown();
 
     runtime_settings m_settings;
     signaling_transport& m_transport;
@@ -48,4 +50,7 @@ private:
     desktop_session_factory m_factory;
     std::shared_ptr<active_desktop_session> m_active_session;
     std::string m_current_client_id;
+
+    std::atomic<uint64_t> m_disconnect_generation{0};
+    bool m_disconnect_teardown_pending = false;
 };

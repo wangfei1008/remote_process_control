@@ -15,8 +15,26 @@
     }
 
     function createSession() {
+        function getOrCreateStableClientId() {
+            // Keep the same clientId across reloads to enable reconnect/resume on server.
+            // Can be overridden by URL ?clientId=xxx
+            try {
+                var qs = new URLSearchParams(window.location.search);
+                var forced = String(qs.get('clientId') || '').trim();
+                if (forced) return forced;
+            } catch (_) {}
+            try {
+                var key = 'rpc_client_id_v1';
+                var existing = String(window.localStorage.getItem(key) || '').trim();
+                if (existing) return existing;
+                var v = window.__rpcRandomId(10);
+                window.localStorage.setItem(key, v);
+                return v;
+            } catch (_) {}
+            return window.__rpcRandomId(10);
+        }
         return {
-            clientId: window.__rpcRandomId(10),
+            clientId: getOrCreateStableClientId(),
             websocket: null,
             pc: null,
             dc: null,
@@ -62,6 +80,58 @@
         }
     }
 
+    function nowTs() {
+        try { return new Date().toISOString(); } catch (_) { return String(Date.now()); }
+    }
+
+    function wsStateName(ws) {
+        try {
+            if (!ws) return 'null';
+            const v = ws.readyState;
+            if (v === WebSocket.CONNECTING) return 'CONNECTING';
+            if (v === WebSocket.OPEN) return 'OPEN';
+            if (v === WebSocket.CLOSING) return 'CLOSING';
+            if (v === WebSocket.CLOSED) return 'CLOSED';
+            return String(v);
+        } catch (_) { return 'unknown'; }
+    }
+
+    function pcStateSnapshot(pc) {
+        try {
+            if (!pc) return { conn: 'null', ice: 'null', signaling: 'null' };
+            return {
+                conn: String(pc.connectionState || ''),
+                ice: String(pc.iceConnectionState || ''),
+                signaling: String(pc.signalingState || ''),
+            };
+        } catch (_) { return { conn: 'err', ice: 'err', signaling: 'err' }; }
+    }
+
+    function recordVideoPageExitReason(session, reason, extra) {
+        if (!session) return;
+        const r = String(reason || '').trim() || 'unknown';
+        const x = extra || {};
+        try {
+            session.__rpc_exit_reason = r;
+            session.__rpc_exit_ts = nowTs();
+            session.__rpc_exit_extra = x;
+        } catch (_) {}
+        try {
+            const pc = pcStateSnapshot(session.pc);
+            console.warn('[rpc-exit] ts=' + nowTs()
+                + ' clientId=' + session.clientId
+                + ' reason=' + r
+                + ' ws=' + wsStateName(session.websocket)
+                + ' pc.conn=' + pc.conn
+                + ' pc.ice=' + pc.ice
+                + ' pc.sig=' + pc.signaling
+                + ' hadVideo=' + (session.rpcHadVideo ? 1 : 0)
+                + ' remoteExitHandled=' + (session.rpcRemoteStreamExitHandled ? 1 : 0)
+                + ' autoClosed=' + (session.rpcAutoClosed ? 1 : 0)
+                + (x && x.detail ? (' detail=' + String(x.detail)) : ''));
+        } catch (_) {}
+    }
+
     /**
      * Electron 紧凑启动（双击磁贴后再连）：未收到首帧前不因信令断开/ICE 失败等关窗，
      * 仅依赖「无视频超时」；出画后恢复对断流、关 track 等的自动关窗。
@@ -74,6 +144,7 @@
     /** 应用模式下自动关窗（Electron 关进程；浏览器尝试 window.close） */
     function closeRpcShellOrWindow(session, reason) {
         if (!rpcShellCloseAllowed(session) || session.rpcAutoClosed) return;
+        recordVideoPageExitReason(session, reason || 'rpc_window_close', { detail: 'closeRpcShellOrWindow' });
         session.rpcAutoClosed = true;
         clearSessionTimer(session, 'rpcNoVideoTimer');
         clearSessionTimer(session, 'rpcWsConnectTimer');
@@ -105,6 +176,7 @@
     function exitVideoPageAfterRemoteStreamEnded(session, doc, ui, reason) {
         if (session.rpcRemoteStreamExitHandled || session.rpcAutoClosed) return;
         session.rpcRemoteStreamExitHandled = true;
+        recordVideoPageExitReason(session, reason || 'remote_stream_ended', { detail: 'exitVideoPageAfterRemoteStreamEnded' });
         if (rpcShellCloseAllowed(session)) {
             closeRpcShellOrWindow(session, reason);
             return;
@@ -133,6 +205,7 @@
     }
 
     function forceExitVideoPageOnNoVideoTimeout(session, doc, ui, reason) {
+        recordVideoPageExitReason(session, reason || 'no_video_timeout', { detail: 'forceExitVideoPageOnNoVideoTimeout' });
         if (rpcShellCloseAllowed(session)) {
             closeRpcShellOrWindow(session, reason);
             return;
@@ -423,6 +496,7 @@
     };
 
     RemoteProcessApplication.prototype.stop = function () {
+        recordVideoPageExitReason(this.session, this.session && this.session.__rpc_exit_reason ? this.session.__rpc_exit_reason : 'app_stop', { detail: 'RemoteProcessApplication.stop' });
         this.sendStopRequest();
         hideVideoStage(this.doc);
         const v = getMainVideo(this.doc);
@@ -469,9 +543,11 @@
         if (closeStage) {
             closeStage.addEventListener('click', function () {
                 if (rpcShellCloseAllowed(self.session) && window.rpcShell && typeof window.rpcShell.close === 'function') {
+                    recordVideoPageExitReason(self.session, 'ui_close_button_rpcShell', { detail: 'video-stage-close click' });
                     window.rpcShell.close();
                     return;
                 }
+                recordVideoPageExitReason(self.session, 'ui_close_button_hide_stage', { detail: 'video-stage-close click' });
                 hideVideoStage(doc);
             });
         }
@@ -501,16 +577,30 @@
             if (e.key === 'Escape') {
                 e.preventDefault();
                 if (rpcShellCloseAllowed(self.session) && window.rpcShell && typeof window.rpcShell.close === 'function') {
+                    recordVideoPageExitReason(self.session, 'esc_rpcShell_close', { detail: 'keydown Escape' });
                     window.rpcShell.close();
                     return;
                 }
                 const fs = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
                 if (fs) exitDocumentFullscreen(doc);
-                else hideVideoStage(doc);
+                else {
+                    recordVideoPageExitReason(self.session, 'esc_hide_stage', { detail: 'keydown Escape' });
+                    hideVideoStage(doc);
+                }
             }
         });
 
-        window.addEventListener('beforeunload', function () { hideVideoStage(doc); });
+        window.addEventListener('beforeunload', function () {
+            recordVideoPageExitReason(self.session,
+                (self.session && self.session.__rpc_exit_reason) ? self.session.__rpc_exit_reason : 'beforeunload',
+                { detail: 'beforeunload' });
+            hideVideoStage(doc);
+        });
+        window.addEventListener('pagehide', function () {
+            recordVideoPageExitReason(self.session,
+                (self.session && self.session.__rpc_exit_reason) ? self.session.__rpc_exit_reason : 'pagehide',
+                { detail: 'pagehide' });
+        });
     };
 
     RemoteProcessApplication.prototype.run = function () {

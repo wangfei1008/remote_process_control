@@ -280,7 +280,8 @@ AVCodecContext* create_h264_encoder(int width, int height, int fps) {
             if (codec->name && std::strcmp(codec->name, "h264_mf") == 0) {
                 std::cout << "[encoder] selected backend=" << backendName << " (h264_mf)"
                           << " pix_fmt=" << static_cast<int>(ctx->pix_fmt)
-                          << " — macOS 浏览器若动区花屏，可试 RPC_ENCODER_BACKEND=sw / sw_first 并确保 FFmpeg 带 libx264"
+                          << " - if macOS Safari/Chrome shows motion artifacts, try "
+                             "RPC_ENCODER_BACKEND=sw|sw_first and FFmpeg with libx264"
                           << std::endl;
             } else {
                 std::cout << "[encoder] selected backend=" << backendName

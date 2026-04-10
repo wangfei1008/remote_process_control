@@ -79,17 +79,17 @@ bool launch_process(const std::string& exe_path,
 {
     STARTUPINFOA startup_info{};
     startup_info.cb = sizeof(startup_info);
+	startup_info.dwFlags = STARTF_USESHOWWINDOW;
+	startup_info.wShowWindow = SW_SHOWMAXIMIZED;
 
     out_target_exe_base_name = window_selection_utils::to_lower_ascii(basename_from_path(exe_path));
 
     if (!CreateProcessA(exe_path.c_str(), NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startup_info, &out_process_info)) {
-        std::cout << "[proc] CreateProcess failed, exe=" << exe_path
-                  << " error=" << GetLastError() << std::endl;
+        std::cout << "[proc] CreateProcess failed, exe=" << exe_path << " error=" << GetLastError() << std::endl;
         return false;
     }
 
-    std::cout << "[proc] CreateProcess ok, pid=" << out_process_info.dwProcessId
-              << " exe=" << exe_path << std::endl;
+    std::cout << "[proc] CreateProcess ok, pid=" << out_process_info.dwProcessId << " exe=" << exe_path << std::endl;
 
     out_launch_pid = out_process_info.dwProcessId;
     out_capture_pid = out_launch_pid;
@@ -99,7 +99,11 @@ bool launch_process(const std::string& exe_path,
 void terminate_processes(PROCESS_INFORMATION& process_info, DWORD capture_pid, DWORD launch_pid)
 {
     if (process_info.hProcess) {
-        TerminateProcess(process_info.hProcess, 0);
+        const DWORD pid = process_info.dwProcessId;
+        const BOOL ok = TerminateProcess(process_info.hProcess, 0);
+        const DWORD err = ok ? 0 : GetLastError();
+        std::cout << "[proc] TerminateProcess launch_pid=" << pid << " ok=" << (ok ? 1 : 0)
+                  << " err=" << err << std::endl;
         CloseHandle(process_info.hProcess);
         process_info.hProcess = nullptr;
     }
@@ -111,8 +115,13 @@ void terminate_processes(PROCESS_INFORMATION& process_info, DWORD capture_pid, D
     if (capture_pid != 0 && capture_pid != launch_pid) {
         HANDLE process_handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, capture_pid);
         if (process_handle) {
-            TerminateProcess(process_handle, 0);
+            const BOOL ok = TerminateProcess(process_handle, 0);
+            const DWORD err = ok ? 0 : GetLastError();
+            std::cout << "[proc] TerminateProcess capture_pid=" << capture_pid << " ok=" << (ok ? 1 : 0)
+                      << " err=" << err << std::endl;
             CloseHandle(process_handle);
+        } else {
+            std::cout << "[proc] OpenProcess(capture_pid) failed pid=" << capture_pid << " err=" << GetLastError() << std::endl;
         }
     }
 }

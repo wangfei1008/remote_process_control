@@ -31,6 +31,7 @@ public:
                           const rtc::binary& audio_sample);
 
 private:
+    void maybe_stop_if_no_clients(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients);
     void send_video_control_messages(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients,
                                        uint64_t video_sample_time_us,
                                        const rtc::binary& video_sample,
@@ -52,5 +53,10 @@ private:
     uint64_t m_video_frame_index = 0;
     int m_last_video_w = 0;
     int m_last_video_h = 0;
+
+    std::chrono::steady_clock::time_point m_last_client_seen = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point m_last_stop_check_log = std::chrono::steady_clock::now();
+    bool m_stop_called = false;
+    uint32_t m_no_client_grace_ms = 60000;
 };
 

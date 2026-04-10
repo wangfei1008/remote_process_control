@@ -555,22 +555,38 @@
             }
             const peer = new RTCPeerConnection(config);
 
+            function nowTs() {
+                try { return new Date().toISOString(); } catch (_) { return String(Date.now()); }
+            }
+            function logPc(tag) {
+                console.info('[rpc] pc:' + tag
+                    + ' ts=' + nowTs()
+                    + ' clientId=' + session.clientId
+                    + ' signaling=' + peer.signalingState
+                    + ' ice=' + peer.iceConnectionState
+                    + ' conn=' + peer.connectionState);
+            }
+
             peer.addEventListener('iceconnectionstatechange', function () {
                 if (ui.iceConnectionState) ui.iceConnectionState.textContent = peer.iceConnectionState;
                 if (ui.iceConnectionIndicator) {
                     ui.iceConnectionIndicator.className =
                         'status-indicator ' + (peer.iceConnectionState === 'connected' ? 'active' : '');
                 }
+                logPc('iceconnectionstatechange');
             });
             peer.addEventListener('icegatheringstatechange', function () {
                 if (ui.iceGatheringState) ui.iceGatheringState.textContent = peer.iceGatheringState;
+                logPc('icegatheringstatechange');
             });
             peer.addEventListener('signalingstatechange', function () {
                 if (ui.signalingState) ui.signalingState.textContent = peer.signalingState;
+                logPc('signalingstatechange');
             });
 
             peer.addEventListener('connectionstatechange', function () {
                 const st = peer.connectionState;
+                logPc('connectionstatechange');
                 if (!session.rpcWindowMode || session.rpcAutoClosed) return;
                 if (st === 'failed') {
                     if (!i.shouldDeferRpcShellCloseUntilVideo || !i.shouldDeferRpcShellCloseUntilVideo(session)) {
@@ -722,6 +738,16 @@
                             // 不能以此忽略，否则 Electron/桌面壳子等不会立即关视频页。
                             i.logDataChannel && i.logDataChannel(ui, 'remoteProcessExited：关闭视频页');
                             i.exitVideoPageAfterRemoteStreamEnded && i.exitVideoPageAfterRemoteStreamEnded(session, doc, ui, 'remote_process_exited');
+                            return;
+                        }
+                        if (j0 && j0.type === 'remoteWindowMissing') {
+                            // 进程仍在，但当前无可采集窗口（启动/切换/遮挡/虚拟桌面等都可能导致短暂无 surfaces）。
+                            // 只提示，不关闭视频页；等待窗口恢复后即可继续出画。
+                            const why = String(j0.why || '');
+                            const ms = Number(j0.missingMs || 0);
+                            i.logDataChannel && i.logDataChannel(ui, 'remoteWindowMissing：等待窗口恢复'
+                                + (ms > 0 ? (' missingMs=' + ms) : '')
+                                + (why ? (' why=' + why) : ''));
                             return;
                         }
                     } catch (_) {}

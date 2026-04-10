@@ -31,7 +31,10 @@ media_pipeline::media_pipeline(std::string exe_path, runtime_settings stream_set
 ///
 /// @时间    2026/4/3
 /////////////////////////////////////////////////////////////////////////////
-std::shared_ptr<remote_desktop_media_session> media_pipeline::get_or_create_media_session(std::function<void()> on_remote_process_exit, std::function<void()> stop_if_no_clients)
+std::shared_ptr<remote_desktop_media_session> media_pipeline::get_or_create_media_session(
+    std::function<void()> on_remote_process_exit,
+    std::function<void(const char* why, uint64_t missing_ms)> on_window_missing,
+    std::function<void()> stop_if_no_clients)
 {
     {
         std::scoped_lock lk(m_mutex);
@@ -45,7 +48,7 @@ std::shared_ptr<remote_desktop_media_session> media_pipeline::get_or_create_medi
     std::cout << "[media_pipeline] create media session exePath=" << m_exe_path << std::endl;
 
     auto session = std::make_shared<remote_desktop_media_session>(m_exe_path, m_stream_settings,
-        std::move(on_remote_process_exit), std::move(stop_if_no_clients));
+        std::move(on_remote_process_exit), std::move(on_window_missing), std::move(stop_if_no_clients));
 
     {
         std::scoped_lock lk(m_mutex);

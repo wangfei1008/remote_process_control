@@ -37,15 +37,18 @@ static uint64_t current_time_in_microseconds()
 remote_desktop_media_session::remote_desktop_media_session(std::string exe_path,
                                                            runtime_settings stream_settings,
                                                            std::function<void()> on_remote_process_exit,
+                                                           std::function<void(const char* why, uint64_t missing_ms)> on_window_missing,
                                                            std::function<void()> stop_if_no_clients)
     : m_exe_path(std::move(exe_path))
     , m_stream_settings(std::move(stream_settings))
     , m_on_remote_process_exit(std::move(on_remote_process_exit))
+    , m_on_window_missing(std::move(on_window_missing))
     , m_stop_if_no_clients(std::move(stop_if_no_clients))
 {
     m_impl = std::make_unique<remote_desktop_media_session_impl>();
 
-    m_impl->m_video_engine = std::make_shared<remote_video_engine>(m_exe_path, m_on_remote_process_exit);
+    m_impl->m_video_engine =
+        std::make_shared<remote_video_engine>(m_exe_path, m_on_remote_process_exit, m_on_window_missing);
     m_impl->m_audio_generator = std::make_shared<silence_opus_generator>(m_impl->m_audio_frame_duration_us);
 
     auto snapshot_clients = [this]() -> std::vector<std::shared_ptr<ClientPeerConnection>> {

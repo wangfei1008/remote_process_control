@@ -16,13 +16,10 @@ public:
                                int& cap_min_top,
                                bool had_successful_video,
                                bool have_last_good_sample,
-                               bool hw_capture_active,
-                               bool capture_all_windows,
-                               HWND main_window,
+                               bool session_uses_dxgi,
                                const std::vector<uint8_t>& last_good_rgb_frame,
                                int last_good_rgb_w,
                                int last_good_rgb_h,
                                GdiCapture& gdi_capture,
                                CaptureBackendState& capture_backend_state);
 };
-

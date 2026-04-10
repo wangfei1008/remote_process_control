@@ -2,6 +2,7 @@
 #include "orchestration/active_desktop_session.h"
 
 #include <iostream>
+#include <thread>
 
 /////////////////////////////////////////////////////////////////////////////
 /// @说明
@@ -57,7 +58,24 @@ void session_director::on_signaling_event(const signaling_event& event)
             break;
         case signaling_event_type::media_session_requested:
             if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
-            replace_with_new_session(event.client_id, event.exe_path, true);
+            if (m_active_session && !m_current_client_id.empty() && event.client_id == m_current_client_id) {
+                cancel_pending_disconnect_teardown();
+                desktop_session_create_params params;
+                params.settings = &m_settings;
+                params.rtc_config = m_rtc_config;
+                params.websocket = m_transport.websocket_weak();
+                params.client_id = event.client_id;
+                params.exe_path = event.exe_path;
+                params.media_enabled = true;
+                params.io_dispatch = &m_task_queue;
+                params.post_to_signaling_thread = [this](std::function<void()> fn) { m_task_queue.dispatch(std::move(fn)); };
+                params.send_signaling_json = [this](const std::string& json) { m_transport.send_json_text(json); };
+                params.on_connection_lost = [this]() { on_operator_connection_lost(); };
+                std::cout << "[session_director] reconnect session client_id=" << event.client_id << std::endl;
+                m_active_session->reconnect_operator(params);
+            } else {
+                replace_with_new_session(event.client_id, event.exe_path, true);
+            }
             break;
         case signaling_event_type::file_only_session_requested:
             if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
@@ -90,6 +108,7 @@ void session_director::replace_with_new_session(const std::string& client_id, co
 {
     teardown_active();
     m_current_client_id = client_id;
+    cancel_pending_disconnect_teardown();
 
     desktop_session_create_params params;
     params.settings = &m_settings;
@@ -105,6 +124,13 @@ void session_director::replace_with_new_session(const std::string& client_id, co
 
     m_active_session = m_factory.create_session(params);
     std::cout << "[session_director] new session client_id=" << client_id << " media=" << media_enabled << std::endl;
+}
+
+void session_director::cancel_pending_disconnect_teardown()
+{
+    m_disconnect_teardown_pending = false;
+    ++m_disconnect_generation;
+    if (m_active_session) m_active_session->end_disconnect_grace();
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -136,8 +162,22 @@ void session_director::teardown_active()
 /////////////////////////////////////////////////////////////////////////////
 void session_director::on_operator_connection_lost()
 {
-    m_task_queue.dispatch([this]() {
-        std::cout << "[session_director] operator connection lost" << std::endl;
-        teardown_active();
+    const uint64_t gen = ++m_disconnect_generation;
+    m_task_queue.dispatch([this, gen]() {
+        if (m_current_client_id.empty() || !m_active_session) return;
+        m_disconnect_teardown_pending = true;
+        m_active_session->begin_disconnect_grace();
+        std::cout << "[session_director] operator connection lost client_id=" << m_current_client_id
+                  << " pending_teardown_s=60" << std::endl;
+        std::thread([this, gen]() {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+            m_task_queue.dispatch([this, gen]() {
+                if (gen != m_disconnect_generation.load()) return;
+                if (!m_disconnect_teardown_pending) return;
+                std::cout << "[session_director] disconnect grace expired, tearing down client_id="
+                          << m_current_client_id << std::endl;
+                teardown_active();
+            });
+        }).detach();
     });
 }

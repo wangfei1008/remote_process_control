@@ -38,11 +38,16 @@ void signaling_transport::start(const std::string& ip, int port)
 {
     m_websocket = std::make_shared<rtc::WebSocket>();
 
-    m_websocket->onOpen([] {});
+    m_websocket->onOpen([this] {
+        std::cout << "[signaling] websocket opened " << m_signaling_url << std::endl;
+    });
     m_websocket->onClosed([this]() {
+        std::cout << "[signaling] websocket closed " << m_signaling_url << std::endl;
         if (m_on_transport_closed) m_thread_queue.dispatch(m_on_transport_closed);
     });
-    m_websocket->onError([](const std::string&) {});
+    m_websocket->onError([this](const std::string& err) {
+        std::cerr << "[signaling] websocket error " << m_signaling_url << " err=" << err << std::endl;
+    });
     m_websocket->onMessage([this](const std::variant<rtc::binary, std::string>& data) {
         if (!std::holds_alternative<std::string>(data)) return;
         const std::string& text = std::get<std::string>(data);

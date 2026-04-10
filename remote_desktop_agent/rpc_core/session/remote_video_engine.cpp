@@ -2,19 +2,20 @@
 
 #include "session/remote_process_session.h"
 
+#include "app/runtime_config.h"
 #include "capture/capture_backend_state.h"
-#include "capture/capture_coordinator.h"
 #include "capture/capture_discard_policy.h"
+#include "capture/capture_grab_outcome.h"
 #include "capture/dxgi_capture.h"
 #include "capture/frame_sanitizer.h"
 #include "capture/gdi_capture.h"
+#include "capture/process_surface_enumerator.h"
+#include "capture/process_ui_capture.h"
 #include "common/rpc_time.h"
 #include "encode/video_encode_pipeline.h"
 #include "input/input_controller.h"
 #include "session/process_lifecycle.h"
 #include "session/session_health_policy.h"
-
-#include "app/runtime_config.h"
 
 #include <chrono>
 #include <iostream>
@@ -25,11 +26,11 @@ namespace {
 
 BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o, const CaptureBackendState* st, uint64_t now_unix_ms)
 {
+    (void)now_unix_ms;
     BmpDumpDiag d;
     d.use_hw_capture = o.used_hw_capture;
+    d.force_software_active = false;
     if (st) {
-        const uint64_t until = st->get_force_software_capture_until_unix_ms();
-        d.force_software_active = (until != 0 && now_unix_ms < until);
         d.top_black_strip_streak = st->get_top_black_strip_streak();
         d.dxgi_instability_score = st->get_dxgi_instability_score();
         d.dxgi_disabled_for_session = st->is_dxgi_disabled_for_session();
@@ -37,11 +38,31 @@ BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o, const CaptureBackend
     return d;
 }
 
+HWND primary_hwnd_from_surfaces(const std::vector<ProcessSurfaceInfo>& surfaces)
+{
+    if (surfaces.empty()) return nullptr;
+    HWND best = nullptr;
+    int best_area = -1;
+    for (const auto& s : surfaces) {
+        const int w = s.rect_screen.right - s.rect_screen.left;
+        const int h = s.rect_screen.bottom - s.rect_screen.top;
+        const int a = w * h;
+        if (a > best_area) {
+            best_area = a;
+            best = s.hwnd;
+        }
+    }
+    return best;
+}
+
 } // namespace
 
-remote_video_engine::remote_video_engine(std::string exe_path, std::function<void()> on_remote_process_exit)
+remote_video_engine::remote_video_engine(std::string exe_path,
+                                         std::function<void()> on_remote_process_exit,
+                                         remote_video_engine::window_missing_fn on_window_missing)
     : m_exe_path(std::move(exe_path))
     , m_on_remote_process_exit(std::move(on_remote_process_exit))
+    , m_on_window_missing(std::move(on_window_missing))
 {
     m_process_session = std::make_unique<RemoteProcessSession>();
 
@@ -55,13 +76,43 @@ remote_video_engine::remote_video_engine(std::string exe_path, std::function<voi
     m_video_fps = 30;
     m_video_encode_pipeline->configure(m_video_fps, m_encoder_layout_change_threshold_px, m_encoder_layout_change_required_streak);
 
-    // 运行时开关（便于对付 DXGI 空帧 / 窗口特殊渲染如 MATLAB）
-    // - RPC_LOCK_CAPTURE_BACKEND=1/0：默认 1（保持现状）。设为 0 可允许 DXGI 失败时回退到 GDI。
-    // - RPC_CAPTURE_ALL_WINDOWS=1/0：默认 0。设为 1 则改为采集当前进程的“所有窗口拼图”（用于诊断/兜底）。
-    m_lock_capture_backend = runtime_config::get_bool("RPC_LOCK_CAPTURE_BACKEND", true);
-    m_capture_all_windows = runtime_config::get_bool("RPC_CAPTURE_ALL_WINDOWS", false);
-    std::cout << "[capture] settings lock_backend=" << (m_lock_capture_backend ? 1 : 0)
-              << " capture_all_windows=" << (m_capture_all_windows ? 1 : 0) << "\n";
+    m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
+}
+
+bool remote_video_engine::is_remote_process_still_running() const
+{
+    // Prefer the original launch handle when available.
+    if (m_pi.hProcess) {
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(m_pi.hProcess, &exit_code) && exit_code == STILL_ACTIVE) {
+            return true;
+        }
+    }
+    const DWORD cap = m_capture_pid;
+    const DWORD launch = m_launch_pid;
+    if (cap != 0 && process_lifecycle::process_is_running(cap)) return true;
+    if (launch != 0 && process_lifecycle::process_is_running(launch)) return true;
+    return false;
+}
+
+void remote_video_engine::notify_window_missing_if_needed(const char* why, uint64_t now_unix_ms)
+{
+    // Throttle to avoid spamming front-end; default 2s.
+    const uint64_t throttle_ms = 2000;
+    if (m_last_window_missing_notify_unix_ms != 0 &&
+        now_unix_ms >= m_last_window_missing_notify_unix_ms &&
+        (now_unix_ms - m_last_window_missing_notify_unix_ms) < throttle_ms) {
+        return;
+    }
+    m_last_window_missing_notify_unix_ms = now_unix_ms;
+
+    if (!m_on_window_missing) return;
+    const uint64_t since = m_window_missing_since_unix_ms ? m_window_missing_since_unix_ms : now_unix_ms;
+    const uint64_t missing_ms = (now_unix_ms >= since) ? (now_unix_ms - since) : 0;
+    try {
+        m_on_window_missing(why ? why : "", missing_ms);
+    } catch (...) {
+    }
 }
 
 remote_video_engine::~remote_video_engine()
@@ -81,31 +132,56 @@ void remote_video_engine::start()
 
     reset_for_session_start();
 
-    // 启动被控进程 + 窗口选择
     std::string target_base;
     m_pi = {};
     m_launch_pid = 0;
     m_capture_pid = 0;
     m_main_window = nullptr;
-    if (!m_process_session->launch_process(
-            m_exe_path, m_pi, m_launch_pid, m_capture_pid, m_main_window, target_base)) {
+    if (!m_process_session->launch_process(m_exe_path, m_pi, m_launch_pid, m_capture_pid, m_main_window, target_base)) {
         m_running = false;
         return;
     }
     m_target_exe_base_name = target_base;
     m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 5000;
 
-    // 配置采集后端健康管理
-    const bool hw_capture_supported = m_dxgi_capture->is_available();
-    const bool hw_capture_active = hw_capture_supported;
-    const bool locked_use_hw_capture = hw_capture_supported;
-    m_capture_backend_state->configure(
-        hw_capture_supported,
-        hw_capture_active,
-        m_lock_capture_backend,
-        locked_use_hw_capture,
-        m_capture_degrade_ms);
-    m_steady_frame_hold = m_lock_capture_backend && !locked_use_hw_capture;
+    m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
+
+    const std::string backend =
+        ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
+    m_session_uses_dxgi = false;
+    if (backend == "dxgi") {
+        m_capture_backend_is_auto = false;
+        if (!m_dxgi_capture || !m_dxgi_capture->is_available()) {
+            std::cout << "[capture] RPC_CAPTURE_BACKEND=dxgi but DXGI is unavailable, terminating remote process\n";
+            try {
+                if (m_process_session && m_pi.hProcess) {
+                    m_process_session->terminate_processes(m_pi, m_capture_pid, m_launch_pid);
+                }
+            } catch (...) {
+            }
+            m_pi = {};
+            m_capture_pid = 0;
+            m_launch_pid = 0;
+            m_running = false;
+            return;
+        }
+        m_session_uses_dxgi = true;
+    } else if (backend == "gdi") {
+        m_capture_backend_is_auto = false;
+        m_session_uses_dxgi = false;
+    } else {
+        m_capture_backend_is_auto = true;
+        if (backend != "auto" && !backend.empty()) {
+            std::cout << "[capture] unknown RPC_CAPTURE_BACKEND=" << backend << ", using auto\n";
+        }
+        m_session_uses_dxgi = m_dxgi_capture && m_dxgi_capture->is_available();
+    }
+
+    m_capture_backend_state->configure(m_session_uses_dxgi, m_capture_degrade_ms, m_capture_backend_is_auto);
+    m_steady_frame_hold = !m_session_uses_dxgi;
+
+    std::cout << "[capture] RPC_CAPTURE_BACKEND resolved session_dxgi=" << (m_session_uses_dxgi ? 1 : 0)
+              << " layout=" << static_cast<int>(m_ui_capture_options.composite_layout) << "\n";
 
     m_exit_notified = false;
     m_exit_watch_thread = std::thread(&remote_video_engine::exit_watch_loop, this);
@@ -123,15 +199,25 @@ void remote_video_engine::stop()
 
     try {
         if (m_process_session && m_pi.hProcess) {
+            std::cout << "[proc] stop: terminating processes launch_pid=" << m_launch_pid
+                      << " capture_pid=" << m_capture_pid << std::endl;
             m_process_session->terminate_processes(m_pi, m_capture_pid, m_launch_pid);
         }
     } catch (...) {
     }
 }
 
-void remote_video_engine::notify_remote_exit_if_needed()
+void remote_video_engine::notify_remote_exit_if_needed(const char* why)
 {
     if (m_exit_notified.exchange(true)) return;
+    try {
+        std::cout << "[proc] remote exit notify why=" << (why ? why : "")
+                  << " launch_pid=" << m_launch_pid
+                  << " capture_pid=" << m_capture_pid
+                  << " main_hwnd=" << static_cast<void*>(m_main_window)
+                  << std::endl;
+    } catch (...) {
+    }
     if (m_on_remote_process_exit) {
         try {
             m_on_remote_process_exit();
@@ -143,7 +229,6 @@ void remote_video_engine::notify_remote_exit_if_needed()
 void remote_video_engine::exit_watch_loop()
 {
     while (m_running.load(std::memory_order_relaxed)) {
-        // 已绑定主窗时：以「窗口所属进程」为准（记事本等可能先起短时启动器 PID，再子进程出窗）
         DWORD window_owner_pid = 0;
         HWND mw = m_main_window;
         if (mw && IsWindow(mw)) {
@@ -153,14 +238,14 @@ void remote_video_engine::exit_watch_loop()
         if (window_owner_pid != 0) {
             HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, window_owner_pid);
             if (!h) {
-                notify_remote_exit_if_needed();
+                notify_remote_exit_if_needed("main_window_owner_open_failed");
                 break;
             }
             DWORD exit_code = 0;
             GetExitCodeProcess(h, &exit_code);
             CloseHandle(h);
             if (exit_code != STILL_ACTIVE) {
-                notify_remote_exit_if_needed();
+                notify_remote_exit_if_needed("main_window_owner_exited");
                 break;
             }
         } else if (m_pi.hProcess) {
@@ -174,9 +259,8 @@ void remote_video_engine::exit_watch_loop()
                 const bool still_in_rebind_grace =
                     rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
                 if (capturing_child || still_in_rebind_grace) {
-                    // 启动器已退出但采集可能已切到子进程，或仍在等待首窗绑定
                 } else {
-                    notify_remote_exit_if_needed();
+                    notify_remote_exit_if_needed("launch_process_exited");
                     break;
                 }
             }
@@ -211,41 +295,49 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         return;
     }
 
-    // 1) 恢复/检查主窗口
-    if (m_main_window && !m_process_session->is_window_viable_for_capture(m_main_window)) {
-		std::cout << "[health] main window lost, hwnd=" << m_main_window << std::endl;
+    const std::vector<ProcessSurfaceInfo> surfaces = ProcessSurfaceEnumerator::enumerate_visible_top_level(m_capture_pid);
+
+    if (surfaces.empty()) {
         m_main_window = nullptr;
-    }
-    if (!m_main_window) {
         try_recover_main_window(now_unix_ms);
-    }
-
-    // 2) 无窗口：与 StreamSource::tick_window 一致，输出空样本推进时间轴（不在 DXGI 缺窗时重复上一帧 H264）。
-    if (!m_main_window) {
         out_sample.clear();
-
-        const bool notify = SessionHealthPolicy::should_notify_remote_exit(m_had_successful_video, now_unix_ms, m_window_missing_since_unix_ms, m_window_missing_exit_grace_ms);
+        const bool notify = SessionHealthPolicy::should_notify_remote_exit(
+            m_had_successful_video, now_unix_ms, m_window_missing_since_unix_ms, m_window_missing_exit_grace_ms);
         if (notify) {
-            notify_remote_exit_if_needed();
-            m_running = false;
+            // Window can be temporarily missing during app startup/transition.
+            // Only treat it as remote exit when the process is actually gone.
+            if (is_remote_process_still_running()) {
+                notify_window_missing_if_needed("no_surfaces_grace_expired_but_process_alive", now_unix_ms);
+            } else {
+                notify_remote_exit_if_needed("no_surfaces_grace_expired");
+                m_running = false;
+            }
         }
         return;
     }
 
-    // 3) 决策采集后端（dxgi/gdi）
-    const bool use_hw_capture = m_capture_backend_state->decide_use_hw_capture(now_unix_ms);
+    m_main_window = primary_hwnd_from_surfaces(surfaces);
 
-    // 4) 采集 + 过滤
+    ProcessUiCaptureOptions opts = m_ui_capture_options;
+    if (!m_capture_backend_is_auto) {
+        opts.session_backend = m_session_uses_dxgi ? ProcessUiSessionBackendMode::Dxgi : ProcessUiSessionBackendMode::Gdi;
+    } else if (m_session_uses_dxgi && m_capture_backend_state->is_dxgi_disabled_for_session()) {
+        opts.session_backend = ProcessUiSessionBackendMode::Gdi;
+    } else {
+        opts.session_backend =
+            m_session_uses_dxgi ? ProcessUiSessionBackendMode::Dxgi : ProcessUiSessionBackendMode::Gdi;
+    }
+
+    m_capture_backend_state->set_last_capture_used_hw(opts.session_backend == ProcessUiSessionBackendMode::Dxgi);
+
     const auto t_cap_begin = std::chrono::steady_clock::now();
-    CaptureGrabOutcome outcome = CaptureCoordinator::grab_rgb_frame(
-        use_hw_capture,
-        m_capture_all_windows,
-        m_lock_capture_backend,
+    CaptureGrabOutcome outcome = ProcessUiCapture::grab_process_ui_rgb(
         m_capture_pid,
-        m_main_window,
+        opts,
         *m_gdi_capture,
         *m_dxgi_capture,
-        *m_capture_backend_state);
+        *m_capture_backend_state,
+        now_unix_ms);
     const auto t_after_cap = std::chrono::steady_clock::now();
 
     int capture_ms = 0;
@@ -259,7 +351,6 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     capture_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t_after_cap - t_cap_begin).count());
     out_telemetry.last_capture_ms = static_cast<uint32_t>(capture_ms);
 
-    // 与 RemoteProcessStreamSource::grab_rgb_frame：GDI 回退仍空时需要 hold + 请求关键帧。
     if (!outcome.ok && outcome.need_hold_on_empty_fallback && m_had_successful_video && m_have_last_good_sample) {
         out_sample = m_last_good_video_sample;
         request_force_keyframe();
@@ -269,22 +360,19 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     const bool discard_empty = CaptureDiscardPolicy::should_discard_if_empty_frame(outcome.frame, outcome.width, outcome.height);
 
     if (discard_slow) {
-        // 与 emit_hold_or_empty_sample(false)：慢采集不重复上一帧码流。
         out_sample.clear();
         return;
     }
 
     if (discard_empty || !outcome.ok) {
-        // 与 emit_hold_or_empty_sample(true)
         apply_emit_fail_policy(out_sample, true);
         return;
     }
 
-    if (use_hw_capture && static_cast<uint64_t>(capture_ms) >= m_capture_degrade_ms) {
-        m_capture_backend_state->on_slow_capture(now_unix_ms, use_hw_capture);
+    if (outcome.used_hw_capture && static_cast<uint64_t>(capture_ms) >= m_capture_degrade_ms) {
+        m_capture_backend_state->on_slow_capture(now_unix_ms);
     }
 
-    // suspicious frame 判定 +（在允许条件下）顶黑条修复
     const bool keep = FrameSanitizer::sanitize_frame(
         outcome.frame,
         outcome.width,
@@ -293,9 +381,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         outcome.cap_min_top,
         m_had_successful_video,
         m_have_last_good_sample,
-        use_hw_capture,
-        m_capture_all_windows,
-        m_main_window,
+        m_session_uses_dxgi,
         m_last_good_rgb_frame,
         m_last_good_rgb_w,
         m_last_good_rgb_h,
@@ -306,13 +392,12 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         return;
     }
 
-    // 与采集帧一致的屏幕矩形（含 DXGI 裁剪、DWM 边框与偶对齐尺寸），供鼠标归一化映射
-    input_controller::instance()->set_capture_screen_rect(outcome.cap_min_left, outcome.cap_min_top, outcome.width, outcome.height);
+    input_controller::instance()->set_capture_screen_rect(
+        outcome.cap_min_left, outcome.cap_min_top, outcome.width, outcome.height);
 
     const BmpDumpDiag bmp_diag = make_bmp_dump_diag(outcome, m_capture_backend_state.get(), now_unix_ms);
     m_bmp_dump.dump_capture_if_needed(outcome.frame, outcome.width, outcome.height, bmp_diag);
 
-    // 5) 编码
     int target_w = outcome.width;
     int target_h = outcome.height;
     bool applied_layout = false;
@@ -348,14 +433,12 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         m_have_last_good_sample = true;
         m_had_successful_video = true;
 
-        // 只用于 frame top strip 修复（尺寸匹配时）。
         m_last_good_rgb_frame = std::move(outcome.frame);
         m_last_good_rgb_w = outcome.width;
         m_last_good_rgb_h = outcome.height;
         return;
     }
 
-    // 编码失败：与 finalize_encode_rgb else 分支一致，重复上一帧并请求 IDR。
     if (m_have_last_good_sample) {
         out_sample = m_last_good_video_sample;
         request_force_keyframe();
@@ -422,6 +505,5 @@ void remote_video_engine::fill_capture_backend_telemetry(remote_capture_telemetr
     out_telemetry.dxgi_disabled_for_session = m_capture_backend_state->is_dxgi_disabled_for_session();
     out_telemetry.top_black_strip_streak = m_capture_backend_state->get_top_black_strip_streak();
     out_telemetry.dxgi_instability_score = m_capture_backend_state->get_dxgi_instability_score();
-    out_telemetry.force_software_capture_until_unix_ms = m_capture_backend_state->get_force_software_capture_until_unix_ms();
+    out_telemetry.force_software_capture_until_unix_ms = 0;
 }
-

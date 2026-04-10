@@ -28,7 +28,9 @@
     <ClCompile Include="rpc_core\capture\gdi_capture.cpp" />
     <ClCompile Include="rpc_core\transport\client_peer_connection.cpp" />
     <ClCompile Include="rpc_core\capture\capture_backend_state.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_coordinator.cpp" />
+    <ClCompile Include="rpc_core\capture\process_surface_enumerator.cpp" />
+    <ClCompile Include="rpc_core\capture\process_ui_capture.cpp" />
+    <ClCompile Include="rpc_core\capture\window_visibility_diagnostics.cpp" />
     <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp" />
     <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
@@ -66,7 +68,10 @@
     <ClInclude Include="webrtc\operator_channel.h" />
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h" />
     <ClInclude Include="rpc_core\capture\capture_backend_state.h" />
-    <ClInclude Include="rpc_core\capture\capture_coordinator.h" />
+    <ClInclude Include="rpc_core\capture\capture_grab_outcome.h" />
+    <ClInclude Include="rpc_core\capture\process_surface_enumerator.h" />
+    <ClInclude Include="rpc_core\capture\process_ui_capture.h" />
+    <ClInclude Include="rpc_core\capture\window_visibility_diagnostics.h" />
     <ClInclude Include="rpc_core\capture\capture_discard_policy.h" />
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
     <ClInclude Include="rpc_core\capture\dxgi_capture.h" />

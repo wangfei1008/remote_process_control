@@ -79,6 +79,8 @@ operator_channel::operator_channel(rtc::Configuration config,
 
     m_peer_connection->onStateChange(
         [this](rtc::PeerConnection::State state) {
+            const int st = static_cast<int>(state);
+            std::cout << "[webrtc] operator pc state=" << st << " client_id=" << m_client_id << "\n";
             if (state == rtc::PeerConnection::State::Disconnected || state == rtc::PeerConnection::State::Failed
                 || state == rtc::PeerConnection::State::Closed) {
                 m_io_dispatch.dispatch([fn = m_on_connection_lost]() {
@@ -161,6 +163,7 @@ void operator_channel::set_remote_answer(const std::string& sdp_text)
 /////////////////////////////////////////////////////////////////////////////
 void operator_channel::close()
 {
+    std::cout << "[webrtc] operator_channel close client_id=" << m_client_id << "\n";
     try {
         if (m_peer_connection) m_peer_connection->close();
     } catch (...) {

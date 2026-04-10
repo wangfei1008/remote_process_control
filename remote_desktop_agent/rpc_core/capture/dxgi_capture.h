@@ -17,10 +17,16 @@ public:
     void reset();
     std::vector<uint8_t> capture_window_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop);
 
+    // 单帧桌面复制：一次 AcquireNextFrame，再从同一帧裁剪多个窗口（多显示器下要求所有窗口中心落在当前 output 内）。
+    bool begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds);
+    std::vector<uint8_t> copy_acquired_window_to_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop);
+    void end_desktop_capture();
+
 private:
     bool init();
     bool init_output_by_index(UINT outputIndex);
     bool ensure_output_for_window(HWND hwnd);
+    bool window_center_on_current_output(HWND hwnd) const;
     bool ensure_staging_texture(int width, int height);
     bool acquire_desktop_frame();
     void reset_duplication();
