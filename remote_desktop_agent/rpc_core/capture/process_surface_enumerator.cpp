@@ -43,6 +43,7 @@ std::vector<ProcessSurfaceInfo> ProcessSurfaceEnumerator::enumerate_visible_top_
             // Input method related class names
             if (strcmp(className, "IME") == 0) return TRUE;          // Default window for input method
             if (strcmp(className, "MSCTFIME UI") == 0) return TRUE;  // TSF Input Method UI
+            if (strcmp(className, "SoPY_Status") == 0) return TRUE;  // SoPY Input Method UI
 
             ProcessSurfaceInfo info;
             info.hwnd = hwnd;

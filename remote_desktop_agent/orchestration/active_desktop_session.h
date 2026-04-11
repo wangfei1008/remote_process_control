@@ -34,6 +34,7 @@ public:
     void wire_components(const desktop_session_create_params& params);
     // Recreate operator_channel for the same session (reconnect) without restarting remote process.
     void reconnect_operator(const desktop_session_create_params& params);
+    const std::string& exe_path() const noexcept { return m_exe_path; }
     // When operator connection is lost, keep media/process alive for a grace period.
     void begin_disconnect_grace();
     void end_disconnect_grace();

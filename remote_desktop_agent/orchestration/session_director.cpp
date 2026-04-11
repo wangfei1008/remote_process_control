@@ -58,7 +58,7 @@ void session_director::on_signaling_event(const signaling_event& event)
             break;
         case signaling_event_type::media_session_requested:
             if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
-            if (m_active_session && !m_current_client_id.empty() && event.client_id == m_current_client_id) {
+            if (m_active_session && !m_current_client_id.empty() && event.client_id == m_current_client_id && m_active_session->exe_path() == event.exe_path) {
                 cancel_pending_disconnect_teardown();
                 desktop_session_create_params params;
                 params.settings = &m_settings;

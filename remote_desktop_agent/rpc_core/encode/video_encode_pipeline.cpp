@@ -53,12 +53,8 @@ void VideoEncodePipeline::request_force_keyframe_with_cooldown(uint64_t now_ms)
     }
 }
 
-bool VideoEncodePipeline::ensure_encoder_layout(int captured_w,
-                                                int captured_h,
-                                                bool had_successful_video,
-                                                int& io_target_w,
-                                                int& io_target_h,
-                                                bool& applied_layout_out)
+bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h, bool had_successful_video,
+                                                int& io_target_w, int& io_target_h, bool& applied_layout_out)
 {
     applied_layout_out = false;
     if (!m_av_codec_ctx) {
@@ -67,10 +63,19 @@ bool VideoEncodePipeline::ensure_encoder_layout(int captured_w,
         return initialize_encoder(io_target_w, io_target_h);
     }
 
-    if (!m_encoder_layout_policy.should_apply_layout_change(
-            captured_w, captured_h, io_target_w, io_target_h, had_successful_video)) {
+    // io_target_w/h 必须由「编码器真实宽高」驱动策略；若每帧都传采集宽高，captured 与 current 永远相等，分辨率永远无法切换。
+    const int encoder_w = m_av_codec_ctx->width;
+    const int encoder_h = m_av_codec_ctx->height;
+
+    if (!m_encoder_layout_policy.should_apply_layout_change(captured_w, captured_h, encoder_w, encoder_h, had_successful_video)) {
+        io_target_w = encoder_w;
+        io_target_h = encoder_h;
+
         return true;
     }
+
+    std::cout << "[encode] keep encoder layout " << encoder_w << "x" << encoder_h << " (captured "
+                << captured_w << "x" << captured_h << ", successful_video=" << had_successful_video << ")\n";
 
     io_target_w = captured_w;
     io_target_h = captured_h;

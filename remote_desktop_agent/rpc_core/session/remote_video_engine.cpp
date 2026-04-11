@@ -402,8 +402,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     int target_h = outcome.height;
     bool applied_layout = false;
 
-    const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout(
-        outcome.width, outcome.height, m_had_successful_video, target_w, target_h, applied_layout);
+    const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout(outcome.width, outcome.height, m_had_successful_video, target_w, target_h, applied_layout);
     out_telemetry.capture_width = target_w;
     out_telemetry.capture_height = target_h;
 
