@@ -9,10 +9,10 @@ flowchart LR
   stream --> audioSrc[SilenceOpusSource]
 
   videoSrc --> producer[producer_loop() produces next media sample]
-  producer --> cap[CaptureCoordinator::grab_rgb_frame()]
-  cap --> gdi[GdiCapture]
-  cap --> dxgi[DXGICapture]
-  cap --> capState[CaptureBackendState]
+  producer --> grab[ProcessUiCapture::grab_process_ui_rgb]
+  grab --> capSrc[ICaptureSource]
+  capSrc -.-> gdiBack[GdiProcessUiCaptureBackend]
+  capSrc -.-> dxgiBack[DxgiProcessUiCaptureBackend]
 
   producer --> sanitize[FrameSanitizer::sanitize_frame()]
   producer --> pacing[FramePacingPolicy::update_and_get_fps()]

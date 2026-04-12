@@ -1,27 +1,69 @@
-#include "capture/dxgi_capture.h"
+#include "capture/dxgi_process_ui_capture_backend.h"
+
 #include "common/window_rect_utils.h"
+
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cstring>
 #include <vector>
 
-DXGICapture::DXGICapture()
+struct DxgiProcessUiCaptureBackend::Impl {
+    Impl();
+    ~Impl();
+
+    bool is_available() const { return m_available; }
+    void reset();
+    bool begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds);
+    std::vector<uint8_t> copy_acquired_window_to_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop);
+    void end_desktop_capture();
+    void note_acquisition_failure(bool& should_reset_duplication);
+    void note_acquisition_success();
+    void reset_session_recovery();
+
+private:
+    bool init();
+    bool init_output_by_index(UINT outputIndex);
+    bool ensure_output_for_window(HWND hwnd);
+    bool window_center_on_current_output(HWND hwnd) const;
+    bool ensure_staging_texture(int width, int height);
+    bool acquire_desktop_frame();
+    void reset_duplication();
+
+    bool m_available = false;
+    UINT m_output_index = 0;
+    int m_output_width = 0;
+    int m_output_height = 0;
+    RECT m_output_rect{ 0, 0, 0, 0 };
+
+    Microsoft::WRL::ComPtr<ID3D11Device> m_device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
+    Microsoft::WRL::ComPtr<IDXGIOutputDuplication> m_duplication;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_last_desktop_frame;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_staging;
+
+    int m_acquisition_fail_streak = 0;
+    static constexpr int k_acquisition_fail_reset_threshold = 6;
+};
+
+DxgiProcessUiCaptureBackend::Impl::Impl()
 {
     m_available = init();
 }
 
-DXGICapture::~DXGICapture()
+DxgiProcessUiCaptureBackend::Impl::~Impl()
 {
     reset_duplication();
 }
 
-void DXGICapture::reset()
+void DxgiProcessUiCaptureBackend::Impl::reset()
 {
-    // 重置复制状态，确保下次采集重新获取帧。
     reset_duplication();
 }
 
-bool DXGICapture::init()
+bool DxgiProcessUiCaptureBackend::Impl::init()
 {
     UINT flags = 0;
 #if defined(_DEBUG)
@@ -58,7 +100,7 @@ bool DXGICapture::init()
     return init_output_by_index(0);
 }
 
-bool DXGICapture::init_output_by_index(UINT outputIndex)
+bool DxgiProcessUiCaptureBackend::Impl::init_output_by_index(UINT outputIndex)
 {
     if (!m_device || !m_context) return false;
     reset_duplication();
@@ -94,7 +136,7 @@ bool DXGICapture::init_output_by_index(UINT outputIndex)
     return true;
 }
 
-void DXGICapture::reset_duplication()
+void DxgiProcessUiCaptureBackend::Impl::reset_duplication()
 {
     if (m_duplication) {
         m_duplication->ReleaseFrame();
@@ -103,7 +145,7 @@ void DXGICapture::reset_duplication()
     m_last_desktop_frame.Reset();
 }
 
-bool DXGICapture::ensure_output_for_window(HWND hwnd)
+bool DxgiProcessUiCaptureBackend::Impl::ensure_output_for_window(HWND hwnd)
 {
     if (!hwnd) return false;
     RECT wr{};
@@ -137,7 +179,7 @@ bool DXGICapture::ensure_output_for_window(HWND hwnd)
     return init_output_by_index(0);
 }
 
-bool DXGICapture::ensure_staging_texture(int width, int height)
+bool DxgiProcessUiCaptureBackend::Impl::ensure_staging_texture(int width, int height)
 {
     if (width <= 0 || height <= 0) return false;
     if (m_staging) {
@@ -163,7 +205,7 @@ bool DXGICapture::ensure_staging_texture(int width, int height)
     return SUCCEEDED(hr) && m_staging;
 }
 
-bool DXGICapture::acquire_desktop_frame()
+bool DxgiProcessUiCaptureBackend::Impl::acquire_desktop_frame()
 {
     if (!m_duplication) return false;
     if (m_last_desktop_frame) {
@@ -190,7 +232,7 @@ bool DXGICapture::acquire_desktop_frame()
     return true;
 }
 
-bool DXGICapture::window_center_on_current_output(HWND hwnd) const
+bool DxgiProcessUiCaptureBackend::Impl::window_center_on_current_output(HWND hwnd) const
 {
     if (!hwnd || !IsWindow(hwnd)) return false;
     RECT wr{};
@@ -200,7 +242,7 @@ bool DXGICapture::window_center_on_current_output(HWND hwnd) const
     return cx >= m_output_rect.left && cx < m_output_rect.right && cy >= m_output_rect.top && cy < m_output_rect.bottom;
 }
 
-bool DXGICapture::begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds)
+bool DxgiProcessUiCaptureBackend::Impl::begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds)
 {
     if (!m_available || hwnds.empty()) return false;
     for (HWND h : hwnds) {
@@ -213,7 +255,11 @@ bool DXGICapture::begin_multiwindow_desktop_capture(const std::vector<HWND>& hwn
     return acquire_desktop_frame();
 }
 
-std::vector<uint8_t> DXGICapture::copy_acquired_window_to_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop)
+std::vector<uint8_t> DxgiProcessUiCaptureBackend::Impl::copy_acquired_window_to_rgb(HWND hwnd,
+                                                                                     int& outWidth,
+                                                                                     int& outHeight,
+                                                                                     int& outLeft,
+                                                                                     int& outTop)
 {
     outWidth = 0;
     outHeight = 0;
@@ -284,7 +330,7 @@ std::vector<uint8_t> DXGICapture::copy_acquired_window_to_rgb(HWND hwnd, int& ou
     return rgb;
 }
 
-void DXGICapture::end_desktop_capture()
+void DxgiProcessUiCaptureBackend::Impl::end_desktop_capture()
 {
     if (m_duplication && m_last_desktop_frame) {
         m_duplication->ReleaseFrame();
@@ -292,17 +338,79 @@ void DXGICapture::end_desktop_capture()
     m_last_desktop_frame.Reset();
 }
 
-std::vector<uint8_t> DXGICapture::capture_window_rgb(HWND hwnd, int& outWidth, int& outHeight, int& outLeft, int& outTop)
+void DxgiProcessUiCaptureBackend::Impl::note_acquisition_failure(bool& should_reset_duplication)
 {
-    outWidth = 0;
-    outHeight = 0;
-    outLeft = 0;
-    outTop = 0;
-    if (!m_available || !hwnd || !IsWindow(hwnd)) return {};
-    const std::vector<HWND> one{hwnd};
-    if (!begin_multiwindow_desktop_capture(one)) return {};
-    std::vector<uint8_t> rgb = copy_acquired_window_to_rgb(hwnd, outWidth, outHeight, outLeft, outTop);
-    end_desktop_capture();
-    return rgb;
+    should_reset_duplication = false;
+    ++m_acquisition_fail_streak;
+    if (m_acquisition_fail_streak >= k_acquisition_fail_reset_threshold) {
+        m_acquisition_fail_streak = 0;
+        should_reset_duplication = true;
+    }
 }
 
+void DxgiProcessUiCaptureBackend::Impl::note_acquisition_success()
+{
+    m_acquisition_fail_streak = 0;
+}
+
+void DxgiProcessUiCaptureBackend::Impl::reset_session_recovery()
+{
+    m_acquisition_fail_streak = 0;
+}
+
+bool DxgiProcessUiCaptureBackend::probe()
+{
+    Impl probe;
+    return probe.is_available();
+}
+
+DxgiProcessUiCaptureBackend::DxgiProcessUiCaptureBackend()
+    : m_impl(std::make_unique<Impl>())
+{
+}
+
+DxgiProcessUiCaptureBackend::~DxgiProcessUiCaptureBackend() = default;
+
+bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<ProcessSurfaceInfo>& surfaces,
+                                                std::vector<ProcessUiWindowTile>& tiles,
+                                                uint64_t /*now_unix_ms*/)
+{
+    tiles.clear();
+    if (!m_impl || !m_impl->is_available() || surfaces.empty()) return false;
+
+    std::vector<HWND> hwnds;
+    hwnds.reserve(surfaces.size());
+    for (const auto& s : surfaces) hwnds.push_back(s.hwnd);
+
+    if (!m_impl->begin_multiwindow_desktop_capture(hwnds)) {
+        bool should_reset = false;
+        m_impl->note_acquisition_failure(should_reset);
+        if (should_reset) m_impl->reset();
+        return false;
+    }
+
+    for (const auto& s : surfaces) {
+        ProcessUiWindowTile t{};
+        t.hwnd = s.hwnd;
+        t.rect_screen = s.rect_screen;
+        t.z_order = s.z_order;
+        t.rgb = m_impl->copy_acquired_window_to_rgb(s.hwnd, t.w, t.h, t.origin_left, t.origin_top);
+        const size_t expected = static_cast<size_t>(t.w) * static_cast<size_t>(t.h) * 3u;
+        if (t.rgb.empty() || t.w <= 0 || t.h <= 0 || t.rgb.size() != expected) {
+            m_impl->end_desktop_capture();
+            bool should_reset = false;
+            m_impl->note_acquisition_failure(should_reset);
+            if (should_reset) m_impl->reset();
+            return false;
+        }
+        tiles.push_back(std::move(t));
+    }
+    m_impl->end_desktop_capture();
+    m_impl->note_acquisition_success();
+    return true;
+}
+
+void DxgiProcessUiCaptureBackend::reset_session_recovery()
+{
+    if (m_impl) m_impl->reset_session_recovery();
+}

@@ -11,16 +11,13 @@
 #include "rtc/rtc.hpp"
 
 #include "capture/bmp_dump_writer.h"
+#include "capture/capture_kind_resolver.h"
+#include "capture/i_capture_source.h"
 #include "capture/process_ui_capture.h"
 #include "session/remote_capture_telemetry.h"
 
 class RemoteProcessSession;
 
-class GdiCapture;
-class DXGICapture;
-class CaptureBackendState;
-class FrameSanitizer;
-class CaptureDiscardPolicy;
 class VideoEncodePipeline;
 
 // 视频引擎：进程全界面采集（不完整帧丢弃）+ 编码
@@ -51,6 +48,8 @@ private:
     void reset_for_session_start();
     void try_recover_main_window(uint64_t now_unix_ms);
     void fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const;
+    /// 对远程主窗口执行一次最大化 + 置顶（每会话每个 HWND 仅做一次，可经 RPC_LAUNCH_WINDOW_* 关闭）。
+    void apply_launch_window_placement(HWND hwnd);
 
     std::string m_exe_path;
     std::function<void()> m_on_remote_process_exit;
@@ -63,7 +62,7 @@ private:
     DWORD m_capture_pid = 0;
     DWORD m_launch_pid = 0;
     HWND m_main_window = nullptr;
-    bool m_capture_backend_is_auto = true;
+    HWND m_last_launch_placement_hwnd = nullptr;
 
     std::thread m_exit_watch_thread;
 
@@ -72,13 +71,14 @@ private:
     bool m_allow_pid_rebind_by_exename = true;
     uint64_t m_pid_rebind_deadline_unix_ms = 0;
 
-    bool m_session_uses_dxgi = false;
-    uint32_t m_capture_degrade_ms = 2500;
+    /// 引擎构造时解析，整引擎生命周期内不变；AUTO 为 DXGI > GDI。
+    /// 显式 dxgi 若 probe 失败：不创建采集后端、不回退 GDI，start() 将拒绝启动（见 m_capture_explicit_backend_error）。
+    ProcessCaptureKind m_capture_kind = ProcessCaptureKind::Gdi;
+    bool m_capture_explicit_backend_error = false;
     ProcessUiCaptureOptions m_ui_capture_options;
 
-    std::unique_ptr<GdiCapture> m_gdi_capture;
-    std::unique_ptr<DXGICapture> m_dxgi_capture;
-    std::unique_ptr<CaptureBackendState> m_capture_backend_state;
+    /// 与 m_capture_kind 对应的唯一采集实现（阶段 B：ICaptureSource）。
+    std::unique_ptr<ICaptureSource> m_capture_source;
 
     int m_video_fps = 30;
     int m_encoder_layout_change_threshold_px = 8;
@@ -100,4 +100,7 @@ private:
     uint64_t m_window_missing_since_unix_ms = 0;
     uint32_t m_window_missing_exit_grace_ms = 0;
     uint64_t m_last_window_missing_notify_unix_ms = 0;
+
+    /// 上一帧 grab 是否走 HW（DXGI），供遥测。
+    bool m_last_capture_used_hw = false;
 };

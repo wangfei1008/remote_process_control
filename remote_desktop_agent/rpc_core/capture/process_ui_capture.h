@@ -7,14 +7,7 @@
 #include <cstdint>
 #include <string>
 
-class GdiCapture;
-class DXGICapture;
-class CaptureBackendState;
-
-enum class ProcessUiSessionBackendMode {
-    Gdi,
-    Dxgi,
-};
+class ICaptureSource;
 
 enum class ProcessUiCompositeLayout {
     Bbox,
@@ -24,7 +17,6 @@ enum class ProcessUiCompositeLayout {
 };
 
 struct ProcessUiCaptureOptions {
-    ProcessUiSessionBackendMode session_backend = ProcessUiSessionBackendMode::Gdi;
     ProcessUiCompositeLayout composite_layout = ProcessUiCompositeLayout::Bbox;
     int composite_padding_px = 8;
     int composite_grid_columns = 2;
@@ -39,11 +31,9 @@ public:
 
     static std::string to_lower_ascii(std::string value);
 
-    // Captures all visible top-level HWNDs for PID; drops whole frame if any tile fails or DXGI batch fails.
+    /// 枚举窗口 + 调用 ICaptureSource 采集瓦片 + 合成布局；不根据帧内容切换后端。
     static CaptureGrabOutcome grab_process_ui_rgb(DWORD pid,
                                                     const ProcessUiCaptureOptions& options,
-                                                    GdiCapture& gdi_capture,
-                                                    DXGICapture& dxgi_capture,
-                                                    CaptureBackendState& capture_backend_state,
+                                                    ICaptureSource& capture,
                                                     uint64_t now_unix_ms);
 };

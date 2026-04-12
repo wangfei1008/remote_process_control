@@ -75,13 +75,19 @@
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\dxgi_capture.cpp">
+    <ClCompile Include="rpc_core\capture\capture_kind_resolver.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\gdi_capture.cpp">
+    <ClCompile Include="rpc_core\capture\capture_source_factory.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_backend_state.cpp">
+    <ClCompile Include="rpc_core\capture\dxgi_process_ui_capture_backend.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\gdi_process_ui_capture_backend.cpp">
+      <Filter>rpc_core\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\i_capture_source.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\capture\process_surface_enumerator.cpp">
@@ -100,9 +106,6 @@
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\window_frame_grabber.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp">
@@ -197,7 +200,13 @@
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_backend_state.h">
+    <ClInclude Include="rpc_core\capture\capture_init_context.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_kind_resolver.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\capture_source_factory.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_grab_outcome.h">
@@ -212,22 +221,25 @@
     <ClInclude Include="rpc_core\capture\window_visibility_diagnostics.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
+    <ClInclude Include="rpc_core\capture\dxgi_process_ui_capture_backend.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\gdi_process_ui_capture_backend.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\i_capture_source.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\process_ui_tile.h">
+      <Filter>rpc_core\capture</Filter>
+    </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_discard_policy.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\dxgi_capture.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\capture\frame_sanitizer.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\gdi_capture.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\window_frame_grabber.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\common\rpc_time.h">

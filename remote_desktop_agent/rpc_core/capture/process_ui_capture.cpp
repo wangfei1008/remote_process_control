@@ -1,11 +1,9 @@
 #include "capture/process_ui_capture.h"
 
 #include "app/runtime_config.h"
-#include "capture/capture_backend_state.h"
-#include "capture/dxgi_capture.h"
-#include "capture/gdi_capture.h"
+#include "capture/i_capture_source.h"
 #include "capture/process_surface_enumerator.h"
-#include "capture/window_frame_grabber.h"
+#include "capture/process_ui_tile.h"
 #include "capture/window_visibility_diagnostics.h"
 #include "common/rpc_time.h"
 #include "common/window_rect_utils.h"
@@ -38,21 +36,11 @@ std::string truncate_for_log(const std::string& s, size_t max_chars)
     return s.substr(0, max_chars) + "...";
 }
 
-struct WindowTile {
-    HWND hwnd = nullptr;
-    RECT rect_screen{};
-    int z_order = 0;
-    std::vector<uint8_t> rgb;
-    int w = 0;
-    int h = 0;
-    int origin_left = 0;
-    int origin_top = 0;
-};
-
 void maybe_log_process_ui_capture(DWORD pid,
+                                  const char* backend_name,
                                   const ProcessUiCaptureOptions& options,
                                   const std::vector<ProcessSurfaceInfo>& surfaces,
-                                  const std::vector<WindowTile>& tiles,
+                                  const std::vector<ProcessUiWindowTile>& tiles,
                                   const CaptureGrabOutcome& outcome)
 {
     if (!runtime_config::get_bool("RPC_LOG_PROCESS_SURFACES", false)) return;
@@ -63,9 +51,6 @@ void maybe_log_process_ui_capture(DWORD pid,
     const auto now_steady = std::chrono::steady_clock::now();
     if (now_steady - s_last_log < std::chrono::milliseconds(interval_ms)) return;
     s_last_log = now_steady;
-
-    const char* be =
-        options.session_backend == ProcessUiSessionBackendMode::Dxgi ? "dxgi" : "gdi";
 
     int union_l = INT_MAX;
     int union_t = INT_MAX;
@@ -78,7 +63,8 @@ void maybe_log_process_ui_capture(DWORD pid,
         union_b = (std::max)(union_b, static_cast<int>(s.rect_screen.bottom));
     }
 
-    std::cout << "[proc_ui] pid=" << pid << " backend=" << be << " layout=" << layout_name(options.composite_layout)
+    std::cout << "[proc_ui] pid=" << pid << " backend=" << (backend_name ? backend_name : "?")
+              << " layout=" << layout_name(options.composite_layout)
               << " surfaces=" << surfaces.size() << std::endl;
     std::cout << "[proc_ui] enum_union_rect LTRB=(" << union_l << "," << union_t << "," << union_r << "," << union_b
               << ") size=" << (union_r - union_l) << "x" << (union_b - union_t) << std::endl;
@@ -120,82 +106,12 @@ void maybe_log_process_ui_capture(DWORD pid,
               << std::endl;
 }
 
-bool capture_tile_gdi(GdiCapture& gdi, const ProcessSurfaceInfo& surf, WindowTile& out)
-{
-    out = WindowTile{};
-    out.hwnd = surf.hwnd;
-    out.rect_screen = surf.rect_screen;
-    out.z_order = surf.z_order;
-    int cap_l = 0;
-    int cap_t = 0;
-    out.rgb = WindowFrameGrabber::capture_main_window_image(
-        gdi, surf.hwnd, out.w, out.h, cap_l, cap_t, true);
-    if (out.rgb.empty() || out.w <= 0 || out.h <= 0) return false;
-    const size_t expected = static_cast<size_t>(out.w) * static_cast<size_t>(out.h) * 3u;
-    if (out.rgb.size() != expected) return false;
-    out.origin_left = cap_l;
-    out.origin_top = cap_t;
-    return true;
-}
-
-bool capture_all_tiles_gdi(GdiCapture& gdi, const std::vector<ProcessSurfaceInfo>& surfaces, std::vector<WindowTile>& tiles)
-{
-    tiles.clear();
-    tiles.reserve(surfaces.size());
-    for (const auto& s : surfaces) {
-        WindowTile t;
-        if (!capture_tile_gdi(gdi, s, t)) return false;
-        tiles.push_back(std::move(t));
-    }
-    return !tiles.empty();
-}
-
-bool capture_all_tiles_dxgi(DXGICapture& dxgi,
-                            const std::vector<ProcessSurfaceInfo>& surfaces,
-                            std::vector<WindowTile>& tiles,
-                            CaptureBackendState& st,
-                            uint64_t now_unix_ms)
-{
-    tiles.clear();
-    if (surfaces.empty()) return false;
-    std::vector<HWND> hwnds;
-    hwnds.reserve(surfaces.size());
-    for (const auto& s : surfaces) hwnds.push_back(s.hwnd);
-
-    if (!dxgi.begin_multiwindow_desktop_capture(hwnds)) {
-        bool should_reset = false;
-        st.on_dxgi_empty(now_unix_ms, should_reset);
-        if (should_reset) dxgi.reset();
-        return false;
-    }
-
-    for (const auto& s : surfaces) {
-        WindowTile t;
-        t.hwnd = s.hwnd;
-        t.rect_screen = s.rect_screen;
-        t.z_order = s.z_order;
-        t.rgb = dxgi.copy_acquired_window_to_rgb(s.hwnd, t.w, t.h, t.origin_left, t.origin_top);
-        const size_t expected = static_cast<size_t>(t.w) * static_cast<size_t>(t.h) * 3u;
-        if (t.rgb.empty() || t.w <= 0 || t.h <= 0 || t.rgb.size() != expected) {
-            dxgi.end_desktop_capture();
-            bool should_reset = false;
-            st.on_dxgi_empty(now_unix_ms, should_reset);
-            if (should_reset) dxgi.reset();
-            return false;
-        }
-        tiles.push_back(std::move(t));
-    }
-    dxgi.end_desktop_capture();
-    st.on_dxgi_success();
-    return true;
-}
-
 void make_even(int& v)
 {
     if (v > 0) v &= ~1;
 }
 
-CaptureGrabOutcome compose_bbox(const std::vector<WindowTile>& tiles)
+CaptureGrabOutcome compose_bbox(const std::vector<ProcessUiWindowTile>& tiles)
 {
     CaptureGrabOutcome outcome;
     if (tiles.empty()) return outcome;
@@ -223,14 +139,14 @@ CaptureGrabOutcome compose_bbox(const std::vector<WindowTile>& tiles)
     outcome.cap_min_left = clip_rect.left;
     outcome.cap_min_top = clip_rect.top;
 
-    std::vector<WindowTile> ordered = tiles;
-    std::sort(ordered.begin(), ordered.end(), [](const WindowTile& a, const WindowTile& b) {
+    std::vector<ProcessUiWindowTile> ordered = tiles;
+    std::sort(ordered.begin(), ordered.end(), [](const ProcessUiWindowTile& a, const ProcessUiWindowTile& b) {
         return a.z_order < b.z_order;
     });
 
     std::vector<uint8_t> merged(static_cast<size_t>(total_width) * static_cast<size_t>(total_height) * 3u, 0);
     for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
-        const WindowTile& win = *it;
+        const ProcessUiWindowTile& win = *it;
         RECT win_rect{win.origin_left, win.origin_top, win.origin_left + win.w, win.origin_top + win.h};
         RECT inter{};
         if (!IntersectRect(&inter, &win_rect, &clip_rect)) continue;
@@ -258,7 +174,7 @@ CaptureGrabOutcome compose_bbox(const std::vector<WindowTile>& tiles)
     return outcome;
 }
 
-CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
+CaptureGrabOutcome compose_linear(const std::vector<ProcessUiWindowTile>& tiles,
                                   int padding_px,
                                   ProcessUiCompositeLayout layout,
                                   int grid_cols)
@@ -266,8 +182,8 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
     CaptureGrabOutcome outcome;
     if (tiles.empty()) return outcome;
 
-    std::vector<WindowTile> ordered = tiles;
-    std::sort(ordered.begin(), ordered.end(), [](const WindowTile& a, const WindowTile& b) {
+    std::vector<ProcessUiWindowTile> ordered = tiles;
+    std::sort(ordered.begin(), ordered.end(), [](const ProcessUiWindowTile& a, const ProcessUiWindowTile& b) {
         return a.z_order < b.z_order;
     });
 
@@ -294,7 +210,7 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
         for (int i = 0; i < n; ++i) {
             const int r = i / cols;
             const int c = i % cols;
-            const WindowTile& t = ordered[static_cast<size_t>(i)];
+            const ProcessUiWindowTile& t = ordered[static_cast<size_t>(i)];
             col_w[static_cast<size_t>(c)] = (std::max)(col_w[static_cast<size_t>(c)], t.w);
             row_h[static_cast<size_t>(r)] = (std::max)(row_h[static_cast<size_t>(r)], t.h);
         }
@@ -310,7 +226,7 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
 
     std::vector<uint8_t> merged(static_cast<size_t>(total_w) * static_cast<size_t>(total_h) * 3u, 0);
 
-    auto blit_at = [&](const WindowTile& win, int dst_x, int dst_y) {
+    auto blit_at = [&](const ProcessUiWindowTile& win, int dst_x, int dst_y) {
         for (int y = 0; y < win.h; ++y) {
             for (int x = 0; x < win.w; ++x) {
                 const int dx = dst_x + x;
@@ -328,14 +244,14 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
     if (layout == ProcessUiCompositeLayout::Horizontal) {
         int x = 0;
         for (size_t i = 0; i < ordered.size(); ++i) {
-            const WindowTile& t = ordered[i];
+            const ProcessUiWindowTile& t = ordered[i];
             blit_at(t, x, (total_h - t.h) / 2);
             x += t.w + (i + 1 < ordered.size() ? pad : 0);
         }
     } else if (layout == ProcessUiCompositeLayout::Vertical) {
         int y = 0;
         for (size_t i = 0; i < ordered.size(); ++i) {
-            const WindowTile& t = ordered[i];
+            const ProcessUiWindowTile& t = ordered[i];
             blit_at(t, (total_w - t.w) / 2, y);
             y += t.h + (i + 1 < ordered.size() ? pad : 0);
         }
@@ -348,7 +264,7 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
         for (int i = 0; i < n; ++i) {
             const int r = i / cols;
             const int c = i % cols;
-            const WindowTile& t = ordered[static_cast<size_t>(i)];
+            const ProcessUiWindowTile& t = ordered[static_cast<size_t>(i)];
             col_w[static_cast<size_t>(c)] = (std::max)(col_w[static_cast<size_t>(c)], t.w);
             row_h[static_cast<size_t>(r)] = (std::max)(row_h[static_cast<size_t>(r)], t.h);
         }
@@ -365,7 +281,7 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
         for (int i = 0; i < n; ++i) {
             const int r = i / cols;
             const int c = i % cols;
-            const WindowTile& t = ordered[static_cast<size_t>(i)];
+            const ProcessUiWindowTile& t = ordered[static_cast<size_t>(i)];
             const int dx = col_x[static_cast<size_t>(c)];
             const int dy = row_y[static_cast<size_t>(r)];
             blit_at(t, dx, dy);
@@ -390,14 +306,14 @@ CaptureGrabOutcome compose_linear(const std::vector<WindowTile>& tiles,
     return outcome;
 }
 
-CaptureGrabOutcome compose(const std::vector<WindowTile>& tiles,
+CaptureGrabOutcome compose(const std::vector<ProcessUiWindowTile>& tiles,
                            ProcessUiCompositeLayout layout,
                            int padding_px,
                            int grid_cols)
 {
     if (tiles.size() == 1) {
         CaptureGrabOutcome o;
-        const WindowTile& t = tiles[0];
+        const ProcessUiWindowTile& t = tiles[0];
         o.frame = t.rgb;
         o.width = t.w;
         o.height = t.h;
@@ -434,35 +350,26 @@ ProcessUiCaptureOptions ProcessUiCapture::load_layout_options_from_config()
     return o;
 }
 
-CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
-                                                         const ProcessUiCaptureOptions& options,
-                                                         GdiCapture& gdi_capture,
-                                                         DXGICapture& dxgi_capture,
-                                                         CaptureBackendState& capture_backend_state,
-                                                         uint64_t now_unix_ms)
+CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms)
 {
-    (void)now_unix_ms;
     CaptureGrabOutcome outcome;
     outcome.ok = false;
     outcome.need_hold_on_empty_fallback = false;
-    outcome.used_hw_capture = (options.session_backend == ProcessUiSessionBackendMode::Dxgi);
+    outcome.used_hw_capture = capture.uses_hw_capture();
 
     const std::vector<ProcessSurfaceInfo> surfaces = ProcessSurfaceEnumerator::enumerate_visible_top_level(pid);
     if (surfaces.empty()) {
         return outcome;
     }
 
-    std::vector<WindowTile> tiles;
-    if (options.session_backend == ProcessUiSessionBackendMode::Dxgi) {
-        if (!dxgi_capture.is_available()) return outcome;
-        if (!capture_all_tiles_dxgi(dxgi_capture, surfaces, tiles, capture_backend_state, now_unix_ms)) return outcome;
-    } else {
-        if (!capture_all_tiles_gdi(gdi_capture, surfaces, tiles)) return outcome;
+    std::vector<ProcessUiWindowTile> tiles;
+    if (!capture.capture_tiles(surfaces, tiles, now_unix_ms)) {
+        return outcome;
     }
 
     outcome = compose(tiles, options.composite_layout, options.composite_padding_px, options.composite_grid_columns);
-    maybe_log_process_ui_capture(pid, options, surfaces, tiles, outcome);
-    outcome.used_hw_capture = (options.session_backend == ProcessUiSessionBackendMode::Dxgi);
+    maybe_log_process_ui_capture(pid, capture.backend_name(), options, surfaces, tiles, outcome);
+    outcome.used_hw_capture = capture.uses_hw_capture();
     if (!outcome.ok || outcome.frame.empty() || outcome.width <= 0 || outcome.height <= 0) {
         outcome.ok = false;
         outcome.frame.clear();

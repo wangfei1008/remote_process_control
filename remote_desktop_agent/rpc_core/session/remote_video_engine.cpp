@@ -3,12 +3,10 @@
 #include "session/remote_process_session.h"
 
 #include "app/runtime_config.h"
-#include "capture/capture_backend_state.h"
 #include "capture/capture_discard_policy.h"
-#include "capture/capture_grab_outcome.h"
-#include "capture/dxgi_capture.h"
+#include "capture/capture_init_context.h"
+#include "capture/capture_source_factory.h"
 #include "capture/frame_sanitizer.h"
-#include "capture/gdi_capture.h"
 #include "capture/process_surface_enumerator.h"
 #include "capture/process_ui_capture.h"
 #include "common/rpc_time.h"
@@ -24,17 +22,14 @@
 
 namespace {
 
-BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o, const CaptureBackendState* st, uint64_t now_unix_ms)
+BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o)
 {
-    (void)now_unix_ms;
     BmpDumpDiag d;
     d.use_hw_capture = o.used_hw_capture;
     d.force_software_active = false;
-    if (st) {
-        d.top_black_strip_streak = st->get_top_black_strip_streak();
-        d.dxgi_instability_score = st->get_dxgi_instability_score();
-        d.dxgi_disabled_for_session = st->is_dxgi_disabled_for_session();
-    }
+    d.top_black_strip_streak = 0;
+    d.dxgi_instability_score = 0;
+    d.dxgi_disabled_for_session = false;
     return d;
 }
 
@@ -66,9 +61,6 @@ remote_video_engine::remote_video_engine(std::string exe_path,
 {
     m_process_session = std::make_unique<RemoteProcessSession>();
 
-    m_gdi_capture = std::make_unique<GdiCapture>();
-    m_dxgi_capture = std::make_unique<DXGICapture>();
-    m_capture_backend_state = std::make_unique<CaptureBackendState>();
     m_video_encode_pipeline = std::make_unique<VideoEncodePipeline>();
     m_bmp_dump.configure_from_config();
 
@@ -77,6 +69,26 @@ remote_video_engine::remote_video_engine(std::string exe_path,
     m_video_encode_pipeline->configure(m_video_fps, m_encoder_layout_change_threshold_px, m_encoder_layout_change_required_streak);
 
     m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
+
+    const std::string backend_cfg =
+        ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
+    const CaptureKindResolveResult resolved = resolve_capture_kind(backend_cfg);
+    m_capture_explicit_backend_error = resolved.explicit_backend_unavailable;
+    if (m_capture_explicit_backend_error) {
+        m_capture_kind = ProcessCaptureKind::Gdi;
+        std::cout << "[capture] RPC_CAPTURE_BACKEND=" << backend_cfg
+                  << " unavailable at init; strict mode — no GDI fallback, capture backend not created.\n";
+        m_steady_frame_hold = true;
+        m_capture_source.reset();
+    } else {
+        m_capture_kind = resolved.kind;
+        m_steady_frame_hold = (m_capture_kind == ProcessCaptureKind::Gdi);
+        m_capture_source = create_capture_source(m_capture_kind);
+        if (m_capture_source) {
+            CaptureInitContext init_ctx{};
+            m_capture_source->init(init_ctx);
+        }
+    }
 }
 
 bool remote_video_engine::is_remote_process_still_running() const
@@ -126,6 +138,14 @@ void remote_video_engine::start()
 
     if (!m_process_session) return;
 
+    if (m_capture_explicit_backend_error) {
+        const std::string req = ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", ""));
+        std::cout << "[capture] abort session start: explicit RPC_CAPTURE_BACKEND=" << req
+                  << " unavailable (strict, no GDI fallback). Set RPC_CAPTURE_BACKEND=auto or gdi.\n";
+        m_running = false;
+        return;
+    }
+
     m_capture_pid = 0;
     m_launch_pid = 0;
     m_main_window = nullptr;
@@ -146,41 +166,7 @@ void remote_video_engine::start()
 
     m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
 
-    const std::string backend =
-        ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
-    m_session_uses_dxgi = false;
-    if (backend == "dxgi") {
-        m_capture_backend_is_auto = false;
-        if (!m_dxgi_capture || !m_dxgi_capture->is_available()) {
-            std::cout << "[capture] RPC_CAPTURE_BACKEND=dxgi but DXGI is unavailable, terminating remote process\n";
-            try {
-                if (m_process_session && m_pi.hProcess) {
-                    m_process_session->terminate_processes(m_pi, m_capture_pid, m_launch_pid);
-                }
-            } catch (...) {
-            }
-            m_pi = {};
-            m_capture_pid = 0;
-            m_launch_pid = 0;
-            m_running = false;
-            return;
-        }
-        m_session_uses_dxgi = true;
-    } else if (backend == "gdi") {
-        m_capture_backend_is_auto = false;
-        m_session_uses_dxgi = false;
-    } else {
-        m_capture_backend_is_auto = true;
-        if (backend != "auto" && !backend.empty()) {
-            std::cout << "[capture] unknown RPC_CAPTURE_BACKEND=" << backend << ", using auto\n";
-        }
-        m_session_uses_dxgi = m_dxgi_capture && m_dxgi_capture->is_available();
-    }
-
-    m_capture_backend_state->configure(m_session_uses_dxgi, m_capture_degrade_ms, m_capture_backend_is_auto);
-    m_steady_frame_hold = !m_session_uses_dxgi;
-
-    std::cout << "[capture] RPC_CAPTURE_BACKEND resolved session_dxgi=" << (m_session_uses_dxgi ? 1 : 0)
+    std::cout << "[capture] capture_kind=" << static_cast<int>(m_capture_kind)
               << " layout=" << static_cast<int>(m_ui_capture_options.composite_layout) << "\n";
 
     m_exit_notified = false;
@@ -193,6 +179,12 @@ void remote_video_engine::stop()
 
     if (m_exit_watch_thread.joinable()) {
         m_exit_watch_thread.join();
+    }
+
+    m_last_launch_placement_hwnd = nullptr;
+
+    if (m_capture_source) {
+        m_capture_source->shutdown();
     }
 
     input_controller::instance()->set_capture_screen_rect(0, 0, 0, 0);
@@ -291,7 +283,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     out_telemetry.last_frame_unix_ms = now_unix_ms;
     fill_capture_backend_telemetry(out_telemetry);
 
-    if (!m_process_session || !m_video_encode_pipeline || !m_capture_backend_state) {
+    if (!m_process_session || !m_video_encode_pipeline) {
         return;
     }
 
@@ -317,28 +309,20 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     }
 
     m_main_window = primary_hwnd_from_surfaces(surfaces);
+    apply_launch_window_placement(m_main_window);
 
-    ProcessUiCaptureOptions opts = m_ui_capture_options;
-    if (!m_capture_backend_is_auto) {
-        opts.session_backend = m_session_uses_dxgi ? ProcessUiSessionBackendMode::Dxgi : ProcessUiSessionBackendMode::Gdi;
-    } else if (m_session_uses_dxgi && m_capture_backend_state->is_dxgi_disabled_for_session()) {
-        opts.session_backend = ProcessUiSessionBackendMode::Gdi;
-    } else {
-        opts.session_backend =
-            m_session_uses_dxgi ? ProcessUiSessionBackendMode::Dxgi : ProcessUiSessionBackendMode::Gdi;
+    if (!m_capture_source) {
+        return;
     }
 
-    m_capture_backend_state->set_last_capture_used_hw(opts.session_backend == ProcessUiSessionBackendMode::Dxgi);
+    ProcessUiCaptureOptions opts = m_ui_capture_options;
 
     const auto t_cap_begin = std::chrono::steady_clock::now();
-    CaptureGrabOutcome outcome = ProcessUiCapture::grab_process_ui_rgb(
-        m_capture_pid,
-        opts,
-        *m_gdi_capture,
-        *m_dxgi_capture,
-        *m_capture_backend_state,
-        now_unix_ms);
+    CaptureGrabOutcome outcome =
+        ProcessUiCapture::grab_process_ui_rgb(m_capture_pid, opts, *m_capture_source, now_unix_ms);
     const auto t_after_cap = std::chrono::steady_clock::now();
+
+    m_last_capture_used_hw = outcome.used_hw_capture;
 
     int capture_ms = 0;
     const bool discard_slow = CaptureDiscardPolicy::should_discard_if_capture_too_slow(
@@ -369,24 +353,15 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         return;
     }
 
-    if (outcome.used_hw_capture && static_cast<uint64_t>(capture_ms) >= m_capture_degrade_ms) {
-        m_capture_backend_state->on_slow_capture(now_unix_ms);
-    }
-
     const bool keep = FrameSanitizer::sanitize_frame(
         outcome.frame,
         outcome.width,
         outcome.height,
-        outcome.cap_min_left,
-        outcome.cap_min_top,
         m_had_successful_video,
         m_have_last_good_sample,
-        m_session_uses_dxgi,
         m_last_good_rgb_frame,
         m_last_good_rgb_w,
-        m_last_good_rgb_h,
-        *m_gdi_capture,
-        *m_capture_backend_state);
+        m_last_good_rgb_h);
     if (!keep) {
         apply_emit_fail_policy(out_sample, true);
         return;
@@ -395,7 +370,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     input_controller::instance()->set_capture_screen_rect(
         outcome.cap_min_left, outcome.cap_min_top, outcome.width, outcome.height);
 
-    const BmpDumpDiag bmp_diag = make_bmp_dump_diag(outcome, m_capture_backend_state.get(), now_unix_ms);
+    const BmpDumpDiag bmp_diag = make_bmp_dump_diag(outcome);
     m_bmp_dump.dump_capture_if_needed(outcome.frame, outcome.width, outcome.height, bmp_diag);
 
     int target_w = outcome.width;
@@ -462,6 +437,8 @@ HWND remote_video_engine::get_main_window() const
 
 void remote_video_engine::reset_for_session_start()
 {
+    m_last_launch_placement_hwnd = nullptr;
+
     m_had_successful_video = false;
     m_last_good_video_sample.clear();
     m_have_last_good_sample = false;
@@ -473,7 +450,7 @@ void remote_video_engine::reset_for_session_start()
     m_window_missing_since_unix_ms = 0;
 
     if (m_video_encode_pipeline) m_video_encode_pipeline->reset_for_stream_start();
-    if (m_capture_backend_state) m_capture_backend_state->reset_for_stream_start();
+    if (m_capture_source) m_capture_source->reset_session_recovery();
     m_bmp_dump.reset_session();
 }
 
@@ -495,14 +472,29 @@ void remote_video_engine::try_recover_main_window(uint64_t now_unix_ms)
         m_allow_pid_rebind_by_exename,
         m_had_successful_video,
         m_pid_rebind_deadline_unix_ms);
+
+    apply_launch_window_placement(m_main_window);
+}
+
+void remote_video_engine::apply_launch_window_placement(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    if (hwnd == m_last_launch_placement_hwnd) return;
+
+    (void)AllowSetForegroundWindow(ASFW_ANY);
+
+    //ShowWindow(hwnd, SW_MAXIMIZE);
+    //SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+
+    m_last_launch_placement_hwnd = hwnd;
+    std::cout << "[proc_ui] launch_window_placement hwnd=" << static_cast<void*>(hwnd) << std::endl;
 }
 
 void remote_video_engine::fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const
 {
-    if (!m_capture_backend_state) return;
-    out_telemetry.last_capture_used_hw = m_capture_backend_state->get_last_capture_used_hw();
-    out_telemetry.dxgi_disabled_for_session = m_capture_backend_state->is_dxgi_disabled_for_session();
-    out_telemetry.top_black_strip_streak = m_capture_backend_state->get_top_black_strip_streak();
-    out_telemetry.dxgi_instability_score = m_capture_backend_state->get_dxgi_instability_score();
+    out_telemetry.last_capture_used_hw = m_last_capture_used_hw;
+    out_telemetry.dxgi_disabled_for_session = false;
+    out_telemetry.top_black_strip_streak = 0;
+    out_telemetry.dxgi_instability_score = 0;
     out_telemetry.force_software_capture_until_unix_ms = 0;
 }
