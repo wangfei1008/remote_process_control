@@ -9,7 +9,7 @@ public:
     GdiProcessUiCaptureBackend();
     ~GdiProcessUiCaptureBackend() override;
 
-    bool capture_tiles(const std::vector<ProcessSurfaceInfo>& surfaces,
+    bool capture_tiles(const std::vector<window_ops::window_info>& surfaces,
                        std::vector<ProcessUiWindowTile>& tiles,
                        uint64_t now_unix_ms) override;
 

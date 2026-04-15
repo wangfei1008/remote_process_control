@@ -1,6 +1,7 @@
 #include "session/window_selection_diagnostics.h"
 
 #include "session/window_selection_utils.h"
+#include "common/window_ops.h"
 
 #include <algorithm>
 #include <iostream>
@@ -25,14 +26,14 @@ void collect_rebind_candidates(
 
     EnumWindows([](HWND hwnd, LPARAM l_param) -> BOOL {
         auto* ctx = reinterpret_cast<Enum_ctx*>(l_param);
+        window_ops wops;
         RECT rect{};
-        if (!GetWindowRect(hwnd, &rect)) return TRUE;
+        if (!wops.get_window_rect(hwnd, rect)) return TRUE;
         const int width = rect.right - rect.left;
         const int height = rect.bottom - rect.top;
         if (width <= 0 || height <= 0) return TRUE;
 
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
+        const DWORD pid = wops.get_window_pid(hwnd);
         if (!pid) return TRUE;
 
         const std::string base = (*(ctx->get_process_basename))(pid);

@@ -1,5 +1,7 @@
 #include "session/window_selection_utils.h"
 
+#include "common/window_ops.h"
+
 #include <algorithm>
 #include <cctype>
 
@@ -13,18 +15,14 @@ std::string to_lower_ascii(std::string s)
 
 std::string get_window_text_lower(HWND hwnd)
 {
-    char buf[512] = {0};
-    const int n = GetWindowTextA(hwnd, buf, static_cast<int>(sizeof(buf)));
-    if (n <= 0) return {};
-    return to_lower_ascii(std::string(buf, buf + n));
+    window_ops wops;
+    return to_lower_ascii(wops.get_window_text_utf8(hwnd));
 }
 
 std::string get_window_class_lower(HWND hwnd)
 {
-    char buf[256] = {0};
-    const int n = GetClassNameA(hwnd, buf, static_cast<int>(sizeof(buf)));
-    if (n <= 0) return {};
-    return to_lower_ascii(std::string(buf, buf + n));
+    window_ops wops;
+    return to_lower_ascii(wops.get_window_class_utf8(hwnd));
 }
 
 std::string exe_stem_lower(const std::string& exe_base_name)
@@ -59,22 +57,22 @@ static bool is_likely_splash_window(HWND hwnd)
 
 int score_window_for_capture(HWND hwnd, DWORD expected_pid, bool require_pid_match)
 {
-    if (!hwnd || !IsWindow(hwnd)) return -1000000;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) return -1000000;
+    const DWORD pid = wops.get_window_pid(hwnd);
     if (!pid) return -1000000;
     if (require_pid_match && pid != expected_pid) return -1000000;
 
     RECT rc{};
-    if (!GetWindowRect(hwnd, &rc)) return -1000000;
+    if (!wops.get_window_rect(hwnd, rc)) return -1000000;
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
     if (width <= 0 || height <= 0) return -1000000;
 
-    const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    const LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    const bool visible = (IsWindowVisible(hwnd) != FALSE);
-    const bool ownerless = (GetWindow(hwnd, GW_OWNER) == NULL);
+    const LONG_PTR style = wops.get_style(hwnd);
+    const LONG_PTR ex_style = wops.get_ex_style(hwnd);
+    const bool visible = wops.is_visible(hwnd);
+    const bool ownerless = wops.is_ownerless_top_level(hwnd);
     const bool tool = ((ex_style & WS_EX_TOOLWINDOW) != 0);
     const bool app_window = ((ex_style & WS_EX_APPWINDOW) != 0);
     const bool caption = ((style & WS_CAPTION) != 0);

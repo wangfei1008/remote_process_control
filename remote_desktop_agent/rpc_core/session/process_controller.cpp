@@ -1,10 +1,10 @@
 #include "session/process_controller.h"
 
 #include "app/runtime_config.h"
-#include "capture/process_surface_enumerator.h"
+#include "common/window_ops.h"
 #include "common/rpc_time.h"
 #include "session/remote_process_session.h"
-#include "session/process_lifecycle.h"
+#include "common/process_ops.h"
 #include "session/session_health_policy.h"
 
 #include <iostream>
@@ -84,7 +84,19 @@ void process_controller::stop()
             if (m_session) {
                 m_session->terminate_processes(m_pi, m_snap.capture_pid, m_snap.launch_pid);
             } else {
-                process_lifecycle::terminate_processes(m_pi, m_snap.capture_pid, m_snap.launch_pid);
+                process_ops ops;
+                if (m_pi.hProcess) {
+                    ops.terminate_by_handle(m_pi.hProcess, 0);
+                    CloseHandle(m_pi.hProcess);
+                    m_pi.hProcess = nullptr;
+                }
+                if (m_pi.hThread) {
+                    CloseHandle(m_pi.hThread);
+                    m_pi.hThread = nullptr;
+                }
+                if (m_snap.capture_pid != 0 && m_snap.capture_pid != m_snap.launch_pid) {
+                    ops.terminate_by_pid(m_snap.capture_pid, 0);
+                }
             }
         } catch (...) {
         }
@@ -152,8 +164,9 @@ bool process_controller::is_remote_process_still_running_unlocked() const
     }
     const DWORD cap = m_snap.capture_pid;
     const DWORD launch = m_snap.launch_pid;
-    if (cap != 0 && process_lifecycle::process_is_running(cap)) return true;
-    if (launch != 0 && process_lifecycle::process_is_running(launch)) return true;
+    process_ops ops;
+    if (cap != 0 && ops.is_running(cap)) return true;
+    if (launch != 0 && ops.is_running(launch)) return true;
     return false;
 }
 
@@ -187,7 +200,7 @@ void process_controller::update_window_discovery_unlocked(uint64_t now_unix_ms)
         !m_snap.target_exe_base_name.empty() &&
         now_unix_ms <= m_snap.pid_rebind_deadline_unix_ms &&
         m_snap.launch_pid != 0 &&
-        process_lifecycle::process_is_running(m_snap.launch_pid);
+        (process_ops().is_running(m_snap.launch_pid));
 
     if (!m_snap.main_hwnd || !m_session->is_window_viable_for_capture(m_snap.main_hwnd)) {
         m_snap.main_hwnd = nullptr;
@@ -219,7 +232,8 @@ void process_controller::update_window_discovery_unlocked(uint64_t now_unix_ms)
     }
 
     // Surfaces discovery (lightweight count) for health state; detailed capture is done elsewhere.
-    const auto surfaces = ProcessSurfaceEnumerator::enumerate_visible_top_level(m_snap.capture_pid);
+    window_ops wops;
+    const auto surfaces = wops.enumerate_visible_top_level(m_snap.capture_pid);
     m_snap.last_surface_count = surfaces.size();
 
     if (!surfaces.empty()) {

@@ -1,6 +1,6 @@
 #include "input_controller.h"
 
-#include "common/window_rect_utils.h"
+#include "common/window_ops.h"
 
 #include <iostream>
 #include <algorithm>
@@ -102,7 +102,8 @@ void input_controller::set_capture_screen_rect(int left, int top, int width, int
 
 void input_controller::bring_mouse_target_foreground()
 {
-	if (!m_map_hwnd || !IsWindow(m_map_hwnd)) return;
+	window_ops wops;
+	if (!m_map_hwnd || !wops.is_valid(m_map_hwnd)) return;
 	if (GetForegroundWindow() == m_map_hwnd) return;
 
 	(void)AllowSetForegroundWindow(ASFW_ANY);
@@ -181,9 +182,13 @@ void input_controller::simulate_mouse_move(int x, int y, int abs_x, int abs_y, i
 		move_mouse_to_screen_pixel(screen_x, screen_y);
 		return;
 	}
-	if (m_map_hwnd && IsWindow(m_map_hwnd) && video_width > 0 && video_height > 0) {
+	if (m_map_hwnd && video_width > 0 && video_height > 0) {
+        window_ops wops;
+        if (!wops.is_valid(m_map_hwnd)) {
+            // fallthrough
+        } else {
 		RECT wr{};
-		if (window_rect_utils::get_effective_window_rect(m_map_hwnd, wr)) {
+		if (wops.get_effective_window_rect(m_map_hwnd, wr)) {
 			const int win_w = wr.right - wr.left;
 			const int win_h = wr.bottom - wr.top;
 			if (win_w > 0 && win_h > 0) {
@@ -199,6 +204,7 @@ void input_controller::simulate_mouse_move(int x, int y, int abs_x, int abs_y, i
 				return;
 			}
 		}
+        }
 	}
 	if (video_width > 0 && video_height > 0) {
 		const int cx = GetSystemMetrics(SM_CXSCREEN);

@@ -2,11 +2,10 @@
 
 #include "app/runtime_config.h"
 #include "capture/i_capture_source.h"
-#include "capture/process_surface_enumerator.h"
 #include "capture/process_ui_tile.h"
 #include "capture/window_visibility_diagnostics.h"
 #include "common/rpc_time.h"
-#include "common/window_rect_utils.h"
+#include "common/window_ops.h"
 
 #include <algorithm>
 #include <cctype>
@@ -39,7 +38,7 @@ std::string truncate_for_log(const std::string& s, size_t max_chars)
 void maybe_log_process_ui_capture(DWORD pid,
                                   const char* backend_name,
                                   const ProcessUiCaptureOptions& options,
-                                  const std::vector<ProcessSurfaceInfo>& surfaces,
+                                  const std::vector<window_ops::window_info>& surfaces,
                                   const std::vector<ProcessUiWindowTile>& tiles,
                                   const CaptureGrabOutcome& outcome)
 {
@@ -350,7 +349,11 @@ ProcessUiCaptureOptions ProcessUiCapture::load_layout_options_from_config()
     return o;
 }
 
-CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid, const std::vector<ProcessSurfaceInfo>& surfaces, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms)
+CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
+                                                         const std::vector<window_ops::window_info>& surfaces,
+                                                         const ProcessUiCaptureOptions& options,
+                                                         ICaptureSource& capture,
+                                                         uint64_t now_unix_ms)
 {
     CaptureGrabOutcome outcome;
     outcome.ok = false;

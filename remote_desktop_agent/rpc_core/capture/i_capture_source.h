@@ -1,7 +1,7 @@
 #pragma once
 
 #include "capture/capture_init_context.h"
-#include "capture/process_surface_enumerator.h"
+#include "common/window_ops.h"
 #include "capture/process_ui_tile.h"
 
 #include <cstdint>
@@ -16,7 +16,7 @@ public:
     virtual void shutdown();
 
     /// 一次整帧：所有 HWND 瓦片须成功，否则返回 false（与原先 DXGI 批语义一致）。
-    virtual bool capture_tiles(const std::vector<ProcessSurfaceInfo>& surfaces,
+    virtual bool capture_tiles(const std::vector<window_ops::window_info>& surfaces,
                                std::vector<ProcessUiWindowTile>& tiles,
                                uint64_t now_unix_ms) = 0;
 

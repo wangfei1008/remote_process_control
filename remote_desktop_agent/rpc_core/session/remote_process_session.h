@@ -5,9 +5,11 @@
 #include <string>
 #include <vector>
 
+#include "common/process_ops.h"
+
 class RemoteProcessSession {
 public:
-    // === 进程生命周期（委托 process_lifecycle 实现）===
+    // === 进程生命周期（委托 process_ops 实现）===
     bool launch_process(const std::string& exe_path,
                         PROCESS_INFORMATION& out_process_info,
                         DWORD& out_launch_pid,
@@ -34,5 +36,16 @@ public:
     // === 诊断输出 ===
     // 输出重绑定候选窗口摘要，帮助定位“匹配失败/评分淘汰”原因。
     void log_window_candidates_for_rebind(DWORD capture_pid, const std::string& target_exe_base_name) const;
+
+    // === 进程查询/工具（供 policy 调用，避免直接散落 Win32 调用）===
+    bool process_is_running(DWORD pid) const { return m_proc.is_running(pid); }
+    std::string get_process_basename(DWORD pid) const { return m_proc.get_process_basename_lower(pid); }
+    bool pid_is_same_or_descendant(DWORD pid, DWORD ancestor_pid) const
+    {
+        return m_proc.is_same_or_descendant(pid, ancestor_pid);
+    }
+
+private:
+    process_ops m_proc;
 };
 

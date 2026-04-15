@@ -1,6 +1,6 @@
 #include "capture/window_visibility_diagnostics.h"
 
-#include "common/window_rect_utils.h"
+#include "common/window_ops.h"
 
 #include <sstream>
 
@@ -27,20 +27,21 @@ WindowVisibilityDiagnosis diagnose_window_visibility(HWND hwnd)
 {
     WindowVisibilityDiagnosis d;
     d.hwnd = hwnd;
-    if (!hwnd || !IsWindow(hwnd)) {
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) {
         d.reason_summary = "invalid HWND";
         return d;
     }
 
-    d.style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    d.ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    d.is_visible_api = IsWindowVisible(hwnd) == TRUE;
+    d.style = wops.get_style(hwnd);
+    d.ex_style = wops.get_ex_style(hwnd);
+    d.is_visible_api = wops.is_visible(hwnd);
     d.minimized = IsIconic(hwnd) == TRUE;
     d.layered = (d.ex_style & WS_EX_LAYERED) != 0;
     d.ex_transparent = (d.ex_style & WS_EX_TRANSPARENT) != 0;
     d.ex_tool_window = (d.ex_style & WS_EX_TOOLWINDOW) != 0;
     d.ex_no_activate = (d.ex_style & WS_EX_NOACTIVATE) != 0;
-    d.has_owner = GetWindow(hwnd, GW_OWNER) != nullptr;
+    d.has_owner = !wops.is_ownerless_top_level(hwnd);
 
     COLORREF ck = 0;
     BYTE alpha = 0;
@@ -52,9 +53,10 @@ WindowVisibilityDiagnosis diagnose_window_visibility(HWND hwnd)
         d.color_key = ck;
     }
 
-    if (auto fn = window_rect_utils::get_dwm_get_window_attribute_fn()) {
+    {
         DWORD cloaked = 0;
-        if (SUCCEEDED(fn(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))) {
+        window_ops wops;
+        if (wops.query_dwm_attribute_dword(hwnd, DWMWA_CLOAKED, cloaked)) {
             d.cloaked = cloaked;
         }
     }

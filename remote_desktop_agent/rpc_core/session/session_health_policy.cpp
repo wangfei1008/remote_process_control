@@ -1,7 +1,5 @@
 #include "session/session_health_policy.h"
 
-#include "session/process_lifecycle.h"
-
 #include "common/rpc_time.h"
 
 #include <iostream>
@@ -24,7 +22,7 @@ HWND SessionHealthPolicy::try_recover_main_window(RemoteProcessSession& remote_p
         !target_exe_base_name.empty() &&
         rpc_unix_epoch_ms() <= pid_rebind_deadline_unix_ms &&
         launch_pid != 0 &&
-        process_lifecycle::process_is_running(launch_pid)) {
+        remote_process_session.process_is_running(launch_pid)) {
         // 启动窗口期兜底：按 basename 匹配窗口并允许 PID 重绑定。
         HWND hwnd = remote_process_session.find_window_by_exe_basename(target_exe_base_name, launch_pid);
         bool by_hint = false;

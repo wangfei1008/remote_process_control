@@ -1,6 +1,6 @@
 #include "capture/dxgi_process_ui_capture_backend.h"
 
-#include "common/window_rect_utils.h"
+#include "common/window_ops.h"
 #include "app/runtime_config.h"
 
 #include <d3d11.h>
@@ -152,7 +152,8 @@ bool DxgiProcessUiCaptureBackend::Impl::ensure_output_for_window(HWND hwnd)
 {
     if (!hwnd) return false;
     RECT wr{};
-    if (!window_rect_utils::get_effective_window_rect(hwnd, wr)) return false;
+    window_ops wops;
+    if (!wops.get_effective_window_rect(hwnd, wr)) return false;
     const LONG cx = (wr.left + wr.right) / 2;
     const LONG cy = (wr.top + wr.bottom) / 2;
     if (cx >= m_output_rect.left && cx < m_output_rect.right &&
@@ -246,9 +247,10 @@ bool DxgiProcessUiCaptureBackend::Impl::acquire_desktop_frame()
 
 bool DxgiProcessUiCaptureBackend::Impl::window_center_on_current_output(HWND hwnd) const
 {
-    if (!hwnd || !IsWindow(hwnd)) return false;
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) return false;
     RECT wr{};
-    if (!window_rect_utils::get_effective_window_rect(hwnd, wr)) return false;
+    if (!wops.get_effective_window_rect(hwnd, wr)) return false;
     const LONG cx = (wr.left + wr.right) / 2;
     const LONG cy = (wr.top + wr.bottom) / 2;
     return cx >= m_output_rect.left && cx < m_output_rect.right && cy >= m_output_rect.top && cy < m_output_rect.bottom;
@@ -257,8 +259,9 @@ bool DxgiProcessUiCaptureBackend::Impl::window_center_on_current_output(HWND hwn
 bool DxgiProcessUiCaptureBackend::Impl::begin_multiwindow_desktop_capture(const std::vector<HWND>& hwnds)
 {
     if (!m_available || hwnds.empty()) return false;
+    window_ops wops;
     for (HWND h : hwnds) {
-        if (!h || !IsWindow(h)) return false;
+        if (!wops.is_valid(h)) return false;
     }
     if (!ensure_output_for_window(hwnds[0])) return false;
     for (size_t i = 1; i < hwnds.size(); ++i) {
@@ -277,10 +280,11 @@ std::vector<uint8_t> DxgiProcessUiCaptureBackend::Impl::copy_acquired_window_to_
     outHeight = 0;
     outLeft = 0;
     outTop = 0;
-    if (!m_available || !hwnd || !IsWindow(hwnd) || !m_last_desktop_frame) return {};
+    window_ops wops;
+    if (!m_available || !wops.is_valid(hwnd) || !m_last_desktop_frame) return {};
 
     RECT winRc{};
-    if (!window_rect_utils::get_effective_window_rect(hwnd, winRc)) return {};
+    if (!wops.get_effective_window_rect(hwnd, winRc)) return {};
 
     RECT clipped{};
     clipped.left = winRc.left;
@@ -383,7 +387,7 @@ DxgiProcessUiCaptureBackend::DxgiProcessUiCaptureBackend()
 
 DxgiProcessUiCaptureBackend::~DxgiProcessUiCaptureBackend() = default;
 
-bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<ProcessSurfaceInfo>& surfaces,
+bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::window_info>& surfaces,
                                                 std::vector<ProcessUiWindowTile>& tiles,
                                                 uint64_t /*now_unix_ms*/)
 {

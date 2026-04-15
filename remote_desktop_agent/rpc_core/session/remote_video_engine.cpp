@@ -6,12 +6,12 @@
 #include "capture/capture_init_context.h"
 #include "capture/capture_source_factory.h"
 #include "capture/frame_sanitizer.h"
-#include "capture/process_surface_enumerator.h"
 #include "capture/process_ui_capture.h"
 #include "common/rpc_time.h"
+#include "common/window_ops.h"
 #include "encode/video_encode_pipeline.h"
 #include "input/input_controller.h"
-#include "session/process_lifecycle.h"
+#include "common/process_ops.h"
 #include "session/session_health_policy.h"
 
 #include <chrono>
@@ -33,7 +33,7 @@ BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o)
     return d;
 }
 
-HWND primary_hwnd_from_surfaces(const std::vector<ProcessSurfaceInfo>& surfaces)
+HWND primary_hwnd_from_surfaces(const std::vector<window_ops::window_info>& surfaces)
 {
     if (surfaces.empty()) return nullptr;
     HWND best = nullptr;
@@ -99,15 +99,17 @@ bool remote_video_engine::is_remote_process_still_running() const
 {
     // Prefer the original launch handle when available.
     if (m_pi.hProcess) {
+        process_ops ops;
         DWORD exit_code = 0;
-        if (GetExitCodeProcess(m_pi.hProcess, &exit_code) && exit_code == STILL_ACTIVE) {
+        if (ops.get_exit_code(m_pi.hProcess, exit_code) && exit_code == STILL_ACTIVE) {
             return true;
         }
     }
     const DWORD cap = m_capture_pid;
     const DWORD launch = m_launch_pid;
-    if (cap != 0 && process_lifecycle::process_is_running(cap)) return true;
-    if (launch != 0 && process_lifecycle::process_is_running(launch)) return true;
+    process_ops ops;
+    if (cap != 0 && ops.is_running(cap)) return true;
+    if (launch != 0 && ops.is_running(launch)) return true;
     return false;
 }
 
@@ -245,31 +247,38 @@ void remote_video_engine::exit_watch_loop()
     while (m_running.load(std::memory_order_relaxed)) {
         DWORD window_owner_pid = 0;
         HWND mw = m_main_window;
-        if (mw && IsWindow(mw)) {
-            GetWindowThreadProcessId(mw, &window_owner_pid);
+        if (mw) {
+            window_ops wops;
+            if (wops.is_valid(mw)) {
+                window_owner_pid = wops.get_window_pid(mw);
+            }
         }
 
         if (window_owner_pid != 0) {
-            HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, window_owner_pid);
+            process_ops ops;
+            auto h = ops.open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
             if (!h) {
                 notify_remote_exit_if_needed("main_window_owner_open_failed");
                 break;
             }
             DWORD exit_code = 0;
-            GetExitCodeProcess(h, &exit_code);
-            CloseHandle(h);
+            if (!ops.get_exit_code(h.get(), exit_code)) {
+                notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
+                break;
+            }
             if (exit_code != STILL_ACTIVE) {
                 notify_remote_exit_if_needed("main_window_owner_exited");
                 break;
             }
         } else if (m_pi.hProcess) {
             DWORD exit_code = 0;
-            const BOOL ok = GetExitCodeProcess(m_pi.hProcess, &exit_code);
+            process_ops ops;
+            const bool ok = ops.get_exit_code(m_pi.hProcess, exit_code);
             if (ok && exit_code != STILL_ACTIVE) {
                 const DWORD cap = m_capture_pid;
                 const DWORD launch = m_launch_pid;
                 const bool capturing_child =
-                    (cap != 0 && cap != launch && process_lifecycle::process_is_running(cap));
+                    (cap != 0 && cap != launch && process_ops().is_running(cap));
                 const bool still_in_rebind_grace =
                     rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
                 if (capturing_child || still_in_rebind_grace) {
@@ -320,7 +329,8 @@ void remote_video_engine::capture_loop()
         }
 
 		// Re-validate main window each tick to handle dynamic surface changes; if lost, attempt recovery and health check.
-        const std::vector<ProcessSurfaceInfo> surfaces = ProcessSurfaceEnumerator::enumerate_visible_top_level(m_capture_pid);
+        window_ops wops;
+        const std::vector<window_ops::window_info> surfaces = wops.enumerate_visible_top_level(m_capture_pid);
 
         if (surfaces.empty()) {
             m_main_window = nullptr;
@@ -627,7 +637,8 @@ void remote_video_engine::try_recover_main_window()
 
 void remote_video_engine::apply_launch_window_placement(HWND hwnd)
 {
-    if (!hwnd || !IsWindow(hwnd)) return;
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) return;
     if (hwnd == m_last_launch_placement_hwnd) return;
 
     (void)AllowSetForegroundWindow(ASFW_ANY);

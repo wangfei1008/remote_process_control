@@ -1,6 +1,6 @@
 #include "capture/gdi_process_ui_capture_backend.h"
 
-#include "common/window_rect_utils.h"
+#include "common/window_ops.h"
 
 #include <algorithm>
 #include <cstring>
@@ -41,7 +41,8 @@ std::vector<uint8_t> gdi_capture_window_rgb24(HWND hwnd, int width, int height, 
 
     if (includeNonClient) {
         RECT wr{};
-        if (window_rect_utils::get_effective_window_rect(hwnd, wr)) {
+        window_ops wops;
+        if (wops.get_effective_window_rect(hwnd, wr)) {
             hScreenDC = GetDC(nullptr);
             if (hScreenDC) {
                 useScreenRectCopy = true;
@@ -124,11 +125,13 @@ std::vector<uint8_t> capture_main_window_image_gdi(HWND hwnd,
     out_height = 0;
     out_min_left = 0;
     out_min_top = 0;
-    if (!hwnd || !IsWindow(hwnd)) return {};
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) return {};
 
     RECT capture_rect{};
     if (include_non_client) {
-        if (!window_rect_utils::get_effective_window_rect(hwnd, capture_rect)) return {};
+        window_ops wops;
+        if (!wops.get_effective_window_rect(hwnd, capture_rect)) return {};
     } else {
         RECT client_rect{};
         if (!GetClientRect(hwnd, &client_rect)) return {};
@@ -177,7 +180,7 @@ GdiProcessUiCaptureBackend::GdiProcessUiCaptureBackend() = default;
 
 GdiProcessUiCaptureBackend::~GdiProcessUiCaptureBackend() = default;
 
-bool GdiProcessUiCaptureBackend::capture_tiles(const std::vector<ProcessSurfaceInfo>& surfaces,
+bool GdiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::window_info>& surfaces,
                                                std::vector<ProcessUiWindowTile>& tiles,
                                                uint64_t /*now_unix_ms*/)
 {
