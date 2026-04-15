@@ -72,15 +72,14 @@ void SessionHealthPolicy::maybe_log_no_window(RemoteProcessSession& remote_proce
     remote_process_session.log_window_candidates_for_rebind(capture_pid, target_exe_base_name);
 }
 
-bool SessionHealthPolicy::should_notify_remote_exit(bool had_successful_video,
-                                                    uint64_t now_ms,
-                                                    uint64_t& io_window_missing_since_unix_ms,
-                                                    uint32_t window_missing_exit_grace_ms)
+bool SessionHealthPolicy::should_notify_remote_exit(bool had_successful_video, uint64_t now_ms, uint64_t& io_window_missing_since_unix_ms,  uint32_t window_missing_exit_grace_ms)
 {
-    if (io_window_missing_since_unix_ms == 0) {
+    if (io_window_missing_since_unix_ms == 0) //缺失计时从第一次发现缺失开始。
         io_window_missing_since_unix_ms = now_ms;
-    }
-    if (!had_successful_video || now_ms < io_window_missing_since_unix_ms) return false;
+
+    if (!had_successful_video || now_ms < io_window_missing_since_unix_ms) return false;//时间回退则不触发
+
+    //超过宽限期才返回 true
     return (now_ms - io_window_missing_since_unix_ms) >= static_cast<uint64_t>(window_missing_exit_grace_ms);
 }
 

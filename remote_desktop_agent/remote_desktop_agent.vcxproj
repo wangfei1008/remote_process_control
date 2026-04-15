@@ -42,6 +42,7 @@
     <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp" />
     <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
     <ClCompile Include="rpc_core\session\process_lifecycle.cpp" />
+    <ClCompile Include="rpc_core\session\process_controller.cpp" />
     <ClCompile Include="rpc_core\session\remote_process_session.cpp" />
     <ClCompile Include="rpc_core\session\window_selection_diagnostics.cpp" />
     <ClCompile Include="rpc_core\session\window_selection_utils.cpp" />
@@ -89,6 +90,7 @@
     <ClInclude Include="rpc_core\encode\h264_encoder.hpp" />
     <ClInclude Include="rpc_core\encode\video_encode_pipeline.h" />
     <ClInclude Include="rpc_core\session\process_lifecycle.h" />
+    <ClInclude Include="rpc_core\session\process_controller.h" />
     <ClInclude Include="rpc_core\session\remote_process_session.h" />
     <ClInclude Include="rpc_core\session\session_health_policy.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine.h" />

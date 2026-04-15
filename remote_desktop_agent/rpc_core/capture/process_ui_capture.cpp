@@ -350,17 +350,14 @@ ProcessUiCaptureOptions ProcessUiCapture::load_layout_options_from_config()
     return o;
 }
 
-CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms)
+CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid, const std::vector<ProcessSurfaceInfo>& surfaces, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms)
 {
     CaptureGrabOutcome outcome;
     outcome.ok = false;
     outcome.need_hold_on_empty_fallback = false;
     outcome.used_hw_capture = capture.uses_hw_capture();
 
-    const std::vector<ProcessSurfaceInfo> surfaces = ProcessSurfaceEnumerator::enumerate_visible_top_level(pid);
-    if (surfaces.empty()) {
-        return outcome;
-    }
+    if (surfaces.empty())  return outcome;
 
     std::vector<ProcessUiWindowTile> tiles;
     if (!capture.capture_tiles(surfaces, tiles, now_unix_ms)) {

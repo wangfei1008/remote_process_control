@@ -53,11 +53,25 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
 {
     const auto clients = m_snapshot_clients ? m_snapshot_clients() : std::vector<std::shared_ptr<ClientPeerConnection>>{};
 
+    const auto t_ctrl0 = std::chrono::steady_clock::now();
     // 1) 视频遥测/控制信令
     send_video_control_messages(clients, video_sample_time_us, video_sample, telemetry);
+    const auto t_ctrl1 = std::chrono::steady_clock::now();
 
     // 2) RTP 视频帧
     send_media_frames(true, video_sample, video_sample_time_us, clients);
+    const auto t_send1 = std::chrono::steady_clock::now();
+
+    if (!video_sample.empty()) {
+        static std::chrono::steady_clock::time_point s_last_split_log{};
+        if (t_send1 - s_last_split_log >= std::chrono::seconds(1)) {
+            s_last_split_log = t_send1;
+            const auto dc_us = std::chrono::duration_cast<std::chrono::microseconds>(t_ctrl1 - t_ctrl0).count();
+            const auto rtp_us = std::chrono::duration_cast<std::chrono::microseconds>(t_send1 - t_ctrl1).count();
+            std::cout << "[latency][agent_send] dc_json_ctrl_us=" << dc_us << " rtp_send_us=" << rtp_us
+                      << " bytes=" << video_sample.size() << std::endl;
+        }
+    }
 
     // 3) stop_if_no_clients（仅当无客户端持续超过宽限）
     maybe_stop_if_no_clients(clients);

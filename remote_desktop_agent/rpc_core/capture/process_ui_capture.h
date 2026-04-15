@@ -1,11 +1,13 @@
 #pragma once
 
 #include "capture/capture_grab_outcome.h"
+#include "capture/process_surface_enumerator.h"
 
 #include <windows.h>
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class ICaptureSource;
 
@@ -32,8 +34,5 @@ public:
     static std::string to_lower_ascii(std::string value);
 
     /// 枚举窗口 + 调用 ICaptureSource 采集瓦片 + 合成布局；不根据帧内容切换后端。
-    static CaptureGrabOutcome grab_process_ui_rgb(DWORD pid,
-                                                    const ProcessUiCaptureOptions& options,
-                                                    ICaptureSource& capture,
-                                                    uint64_t now_unix_ms);
+    static CaptureGrabOutcome grab_process_ui_rgb(DWORD pid, const std::vector<ProcessSurfaceInfo>& surfaces, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms);
 };

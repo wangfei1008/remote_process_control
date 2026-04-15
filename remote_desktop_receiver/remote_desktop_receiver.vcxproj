@@ -11,23 +11,43 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="receiver_main.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\receiver_context.cpp" />
+    <ClCompile Include="src\receiver_session.cpp" />
+    <ClCompile Include="src\rdr_d3d.cpp" />
+    <ClCompile Include="src\rdr_input.cpp" />
+    <ClCompile Include="src\rdr_log.cpp" />
+    <ClCompile Include="src\rdr_signaling.cpp" />
+    <ClCompile Include="src\h264_annexb_decoder.cpp" />
+    <ClCompile Include="src\h264_d3d11va_decoder.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app_info.hpp" />
+    <ClInclude Include="src\h264_decoder_iface.hpp" />
+    <ClInclude Include="src\h264_annexb_decoder.hpp" />
+    <ClInclude Include="src\h264_d3d11va_decoder.hpp" />
+    <ClInclude Include="src\receiver_context.hpp" />
+    <ClInclude Include="src\rdr_d3d.hpp" />
+    <ClInclude Include="src\rdr_input.hpp" />
+    <ClInclude Include="src\rdr_log.hpp" />
+    <ClInclude Include="src\rdr_signaling.hpp" />
+    <ClInclude Include="src\receiver_session.hpp" />
+    <ClInclude Include="src\rdr_win32_include.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{833B1D7C-1353-47E0-B029-67160E259EE2}</ProjectGuid>
-    <RootNamespace>cpp_receiver</RootNamespace>
+    <RootNamespace>remote_desktop_receiver</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;D:\code\orient\remote_process_control\remote_process_control;$(IncludePath)</IncludePath>
-    <!-- 与 remote_process_control Debug|x64 一致：/MDd + libdatachannel build\Debug（勿与 Release 版 datachannel.dll 混用） -->
-    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Debug;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.43.34808\atlmfc\lib\x64;D:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\VS\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\um\x64;C:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(SolutionDir);$(IncludePath)</IncludePath>
+    <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;D:\code\orient\remote_process_control\remote_process_control;$(IncludePath)</IncludePath>
+    <IncludePath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\include;D:\code\sdk\av\libdatachannel-0.22.6\include;D:\code\sdk\av\libdatachannel-0.22.6\deps\json\include;$(SolutionDir);$(IncludePath)</IncludePath>
     <LibraryPath>D:\code\sdk\av\ffmpeg\ffmpeg_4.4\outputX64\lib;D:\code\sdk\av\libdatachannel-0.22.6\build\Release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -60,13 +80,12 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <!-- 默认 Debug 为 /MDd，与 remote_process_control 一致；勿再设为 MultiThreadedDLL -->
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <!-- 不要显式写 msvcprt.lib，否则会固定链到 Release 版 CRT，与 /MDd 冲突 -->
+      <AdditionalLibraryDirectories>$(VCToolsInstallDir)lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\ucrt\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>ws2_32.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;datachannel.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -79,13 +98,14 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(VCToolsInstallDir)lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\ucrt\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>ws2_32.lib;avcodec.lib;avutil.lib;swscale.lib;avformat.lib;datachannel.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>

@@ -15,7 +15,7 @@
   - `my_data.html` / `my_data.js`：“我的数据”文件浏览/上传/下载
 - `signaling-server-qt/`：WebSocket 信令服务（按 id 转发）
 - `rpc_remote_client/`：Windows 远端客户端（VS 工程）
-- `cpp_receiver/`：接收端相关工程
+- `remote_desktop_receiver/`：独立接收端（WebRTC Answerer + H264 解码 + D3D 呈现 + 输入回传）
 - `docs/`：架构与运行说明文档
 
 ---

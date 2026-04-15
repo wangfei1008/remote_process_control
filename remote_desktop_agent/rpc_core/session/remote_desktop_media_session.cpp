@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <iostream>
 #include <thread>
 #include <utility>
 
@@ -111,8 +113,34 @@ void remote_desktop_media_session::start_media_session()
             if (m_impl->m_next_video_time_us <= m_impl->m_next_audio_time_us) {
                 rtc::binary video_sample;
                 remote_capture_telemetry telemetry;
+
+                static std::uint64_t s_video_loop_tick = 0;
+                ++s_video_loop_tick;
+
+                const auto t_produce0 = std::chrono::steady_clock::now();
                 m_impl->m_video_engine->produce_next_video_sample(video_sample, telemetry);
+                const auto t_produce1 = std::chrono::steady_clock::now();
                 m_impl->m_sender->on_video_sample(m_impl->m_next_video_time_us, video_sample, telemetry);
+                const auto t_after_send = std::chrono::steady_clock::now();
+
+                const auto produce_us = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(t_produce1 - t_produce0).count());
+                const auto send_us = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(t_after_send - t_produce1).count());
+
+                static std::chrono::steady_clock::time_point s_last_nonempty_log{};
+                if (!video_sample.empty()) {
+                    if (t_after_send - s_last_nonempty_log >= std::chrono::seconds(1) || s_video_loop_tick <= 5) {
+                        s_last_nonempty_log = t_after_send;
+                        std::cout << "[latency][agent_pipe] tick=" << s_video_loop_tick
+                                  << " produce_us=" << produce_us << " send_path_us=" << send_us
+                                  << " cap_ms=" << telemetry.last_capture_ms
+                                  << " enc_ms=" << telemetry.last_encode_ms
+                                  << " bytes=" << video_sample.size() << std::endl;
+                    }
+                } else if (s_video_loop_tick <= 12) {
+                    std::cout << "[latency][agent_pipe] tick=" << s_video_loop_tick
+                              << " produce_us=" << produce_us << " send_path_us=" << send_us << " (empty)\n";
+                }
+
                 m_impl->m_next_video_time_us += m_impl->m_video_frame_duration_us;
             } else {
                 rtc::binary audio_sample;

@@ -1,8 +1,13 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <deque>
 #include <string>
 #include <thread>
 #include <windows.h>
@@ -46,10 +51,53 @@ private:
     void apply_emit_fail_policy(rtc::binary& out_sample, bool request_idr);
 
     void reset_for_session_start();
-    void try_recover_main_window(uint64_t now_unix_ms);
+    void try_recover_main_window();
     void fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const;
     /// 对远程主窗口执行一次最大化 + 置顶（每会话每个 HWND 仅做一次，可经 RPC_LAUNCH_WINDOW_* 关闭）。
     void apply_launch_window_placement(HWND hwnd);
+
+    struct CapturedFrame {
+        uint64_t frame_id = 0;
+        uint64_t unix_ms = 0;
+        std::chrono::steady_clock::time_point t_cap_begin{};
+        std::chrono::steady_clock::time_point t_cap_done{};
+        int width = 0;
+        int height = 0;
+        int cap_min_left = 0;
+        int cap_min_top = 0;
+        bool used_hw_capture = false;
+        std::vector<uint8_t> rgb;
+    };
+
+    struct LatestFrameSlot {
+        std::mutex mtx;
+        std::condition_variable cv;
+        std::optional<CapturedFrame> latest;
+        uint64_t dropped_by_overwrite = 0;
+        uint64_t stored_frames = 0;
+    };
+
+    struct EncodedSample {
+        uint64_t frame_id = 0;
+        uint64_t unix_ms = 0;
+        uint32_t capture_ms = 0;
+        uint32_t encode_ms = 0;
+        rtc::binary sample;
+        bool used_hw_capture = false;
+        int w = 0;
+        int h = 0;
+    };
+
+    struct LatestEncodedQueue {
+        std::mutex mtx;
+        std::deque<EncodedSample> q;
+        size_t capacity = 1;
+        uint64_t dropped_by_overflow = 0;
+        uint64_t pushed = 0;
+    };
+
+    void capture_loop();
+    void encode_loop();
 
     std::string m_exe_path;
     std::function<void()> m_on_remote_process_exit;
@@ -65,6 +113,23 @@ private:
     HWND m_last_launch_placement_hwnd = nullptr;
 
     std::thread m_exit_watch_thread;
+    std::thread m_capture_thread;
+    std::thread m_encode_thread;
+
+    std::atomic<bool> m_threads_running{false};
+    std::atomic<uint64_t> m_frame_id_seq{0};
+
+    LatestFrameSlot m_latest_frame;
+    LatestEncodedQueue m_latest_encoded;
+
+    // Shared snapshot for telemetry fields filled by encode thread.
+    std::mutex m_last_enc_mtx;
+    uint32_t m_last_capture_ms = 0;
+    uint32_t m_last_encode_ms = 0;
+    uint64_t m_last_frame_unix_ms = 0;
+    bool m_last_used_hw_capture = false;
+    int m_last_capture_w = 0;
+    int m_last_capture_h = 0;
 
     std::unique_ptr<RemoteProcessSession> m_process_session;
     std::string m_target_exe_base_name;
@@ -86,19 +151,20 @@ private:
 
     std::unique_ptr<VideoEncodePipeline> m_video_encode_pipeline;
     BmpDumpWriter m_bmp_dump;
-    bool m_had_successful_video = false;
+    std::atomic<bool> m_had_successful_video{false};
 
     bool m_steady_frame_hold = false;
 
+    std::mutex m_last_good_sample_mtx;
     rtc::binary m_last_good_video_sample;
-    bool m_have_last_good_sample = false;
+    std::atomic<bool> m_have_last_good_sample{false};
 
     std::vector<uint8_t> m_last_good_rgb_frame;
     int m_last_good_rgb_w = 0;
     int m_last_good_rgb_h = 0;
 
-    uint64_t m_window_missing_since_unix_ms = 0;
-    uint32_t m_window_missing_exit_grace_ms = 0;
+	uint64_t m_window_missing_since_unix_ms = 0;//第一次检测到窗口缺失的时间戳，用于判断是否超过 grace 时间阈值以触发远程退出通知。
+	uint32_t m_window_missing_exit_grace_ms = 0;//窗口缺失触发远程退出通知的宽限时间，单位毫秒，构造时从配置加载。
     uint64_t m_last_window_missing_notify_unix_ms = 0;
 
     /// 上一帧 grab 是否走 HW（DXGI），供遥测。

@@ -1,6 +1,7 @@
 #include "capture/dxgi_process_ui_capture_backend.h"
 
 #include "common/window_rect_utils.h"
+#include "app/runtime_config.h"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -22,6 +23,7 @@ struct DxgiProcessUiCaptureBackend::Impl {
     void note_acquisition_failure(bool& should_reset_duplication);
     void note_acquisition_success();
     void reset_session_recovery();
+    bool last_acquire_timed_out() const { return m_last_acquire_timed_out; }
 
 private:
     bool init();
@@ -44,6 +46,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_last_desktop_frame;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_staging;
 
+    bool m_last_acquire_timed_out = false;
     int m_acquisition_fail_streak = 0;
     static constexpr int k_acquisition_fail_reset_threshold = 6;
 };
@@ -208,17 +211,26 @@ bool DxgiProcessUiCaptureBackend::Impl::ensure_staging_texture(int width, int he
 bool DxgiProcessUiCaptureBackend::Impl::acquire_desktop_frame()
 {
     if (!m_duplication) return false;
+    m_last_acquire_timed_out = false;
     if (m_last_desktop_frame) {
         m_last_desktop_frame.Reset();
     }
 
     DXGI_OUTDUPL_FRAME_INFO frameInfo{};
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
-    HRESULT hr = m_duplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
-    if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
+    const int timeout_ms = (std::max)(0, runtime_config::get_int("RPC_DXGI_ACQUIRE_TIMEOUT_MS", 1));
+    HRESULT hr = m_duplication->AcquireNextFrame(static_cast<UINT>(timeout_ms), &frameInfo, &desktopResource);
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+        m_last_acquire_timed_out = true;
+        return false;
+    }
     if (hr == DXGI_ERROR_ACCESS_LOST) {
         if (!init_output_by_index(m_output_index)) return false;
-        hr = m_duplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+        hr = m_duplication->AcquireNextFrame(static_cast<UINT>(timeout_ms), &frameInfo, &desktopResource);
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            m_last_acquire_timed_out = true;
+            return false;
+        }
     }
     if (FAILED(hr) || !desktopResource) return false;
 
@@ -384,7 +396,11 @@ bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<ProcessSurface
 
     if (!m_impl->begin_multiwindow_desktop_capture(hwnds)) {
         bool should_reset = false;
-        m_impl->note_acquisition_failure(should_reset);
+        // Non-blocking AcquireNextFrame can legitimately time out when the desktop has no new frame.
+        // Do NOT treat WAIT_TIMEOUT as a failure streak that triggers duplication reset.
+        if (!m_impl->last_acquire_timed_out()) {
+            m_impl->note_acquisition_failure(should_reset);
+        }
         if (should_reset) m_impl->reset();
         return false;
     }

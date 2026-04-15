@@ -2,7 +2,8 @@
 /rpc_remote_client
 /signaling-server-qt/tmp
 /x64
-/cpp_receiver/x64
+/remote_desktop_receiver/x64
 *.log
 /remote_desktop_agent/x64
 /remote_desktop_agent/remote_d.B8C4D2E1
+/remote_desktop_receiver/remote_d.833B1D7C
