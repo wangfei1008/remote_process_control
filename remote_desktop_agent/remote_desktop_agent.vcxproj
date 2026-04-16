@@ -16,6 +16,7 @@
     <ClCompile Include="app\rpc_remote_application.cpp" />
     <ClCompile Include="bootstrap\runtime_settings.cpp" />
     <ClCompile Include="input\input_controller.cpp" />
+    <ClCompile Include="rpc_core\common\character_conversion.cpp" />
     <ClCompile Include="signaling\signaling_transport.cpp" />
     <ClCompile Include="orchestration\active_desktop_session.cpp" />
     <ClCompile Include="orchestration\desktop_session_factory.cpp" />
@@ -31,7 +32,6 @@
     <ClCompile Include="rpc_core\capture\gdi_process_ui_capture_backend.cpp" />
     <ClCompile Include="rpc_core\capture\i_capture_source.cpp" />
     <ClCompile Include="rpc_core\capture\process_ui_capture.cpp" />
-    <ClCompile Include="rpc_core\capture\window_visibility_diagnostics.cpp" />
     <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp" />
     <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
@@ -42,10 +42,6 @@
     <ClCompile Include="rpc_core\common\process_ops.cpp" />
     <ClCompile Include="rpc_core\common\window_ops.cpp" />
     <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
-    <ClCompile Include="rpc_core\session\process_controller.cpp" />
-    <ClCompile Include="rpc_core\session\remote_process_session.cpp" />
-    <ClCompile Include="rpc_core\session\window_selection_diagnostics.cpp" />
-    <ClCompile Include="rpc_core\session\window_selection_utils.cpp" />
     <ClCompile Include="rpc_core\session\session_health_policy.cpp" />
     <ClCompile Include="rpc_core\session\remote_video_engine.cpp" />
     <ClCompile Include="rpc_core\source\silence_opus_generator.cpp" />
@@ -59,6 +55,7 @@
     <ClInclude Include="app\runtime_config.h" />
     <ClInclude Include="bootstrap\runtime_settings.h" />
     <ClInclude Include="input\input_controller.h" />
+    <ClInclude Include="rpc_core\common\character_conversion.h" />
     <ClInclude Include="signaling\signaling_event.h" />
     <ClInclude Include="signaling\signaling_observer.h" />
     <ClInclude Include="signaling\signaling_transport.h" />
@@ -78,7 +75,6 @@
     <ClInclude Include="rpc_core\capture\i_capture_source.h" />
     <ClInclude Include="rpc_core\capture\process_ui_tile.h" />
     <ClInclude Include="rpc_core\capture\process_ui_capture.h" />
-    <ClInclude Include="rpc_core\capture\window_visibility_diagnostics.h" />
     <ClInclude Include="rpc_core\capture\capture_discard_policy.h" />
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
     <ClInclude Include="rpc_core\capture\frame_sanitizer.h" />
@@ -89,13 +85,9 @@
     <ClInclude Include="rpc_core\encode\h264_avcc_utils.h" />
     <ClInclude Include="rpc_core\encode\h264_encoder.hpp" />
     <ClInclude Include="rpc_core\encode\video_encode_pipeline.h" />
-    <ClInclude Include="rpc_core\session\process_controller.h" />
-    <ClInclude Include="rpc_core\session\remote_process_session.h" />
     <ClInclude Include="rpc_core\session\session_health_policy.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine.h" />
     <ClInclude Include="rpc_core\session\remote_capture_telemetry.h" />
-    <ClInclude Include="rpc_core\session\window_selection_diagnostics.h" />
-    <ClInclude Include="rpc_core\session\window_selection_utils.h" />
     <ClInclude Include="rpc_core\source\silence_opus_generator.h" />
     <ClInclude Include="rpc_core\transport\client_peer_connection.h" />
     <ClInclude Include="rpc_core\transport\dispatch_queue.hpp" />

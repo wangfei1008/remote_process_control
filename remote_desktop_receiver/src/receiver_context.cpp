@@ -16,6 +16,15 @@ int g_maxPresentFps = 60;
 std::mutex g_frameMtx;
 SharedVideoFrame g_sharedFrame;
 
+std::atomic<bool> g_pendingSeiValid{false};
+std::atomic<uint64_t> g_pendingFrameId{0};
+std::atomic<uint64_t> g_pendingCapMs{0};
+std::atomic<uint64_t> g_pendingEncMs{0};
+std::atomic<uint64_t> g_pendingSendMs{0};
+
+std::atomic<bool> g_pendingRxMsValid{false};
+std::atomic<uint64_t> g_pendingRxMs{0};
+
 std::recursive_mutex g_dcMtx;
 std::shared_ptr<rtc::DataChannel> g_dataChannel;
 std::shared_ptr<rtc::Track> g_videoTrackKeepAlive;

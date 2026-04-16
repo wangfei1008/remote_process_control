@@ -1,6 +1,10 @@
 #include "window_ops.h"
 
+#include <functional>
+
 #if defined(_WIN32)
+#include "character_conversion.h"
+
 #include <cwchar>
 
 #include <cstring>
@@ -22,16 +26,6 @@ static DwmGetWindowAttributeFn get_dwm_get_window_attribute_fn()
         return fn;
     }();
     return s_fn;
-}
-
-static std::string utf16_to_utf8(const WCHAR* wstr, int len)
-{
-    if (!wstr || len <= 0) return {};
-    const int need = WideCharToMultiByte(CP_UTF8, 0, wstr, len, nullptr, 0, nullptr, nullptr);
-    if (need <= 0) return {};
-    std::string out(static_cast<size_t>(need), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wstr, len, out.data(), need, nullptr, nullptr);
-    return out;
 }
 
 } // namespace
@@ -221,7 +215,7 @@ std::string window_ops::get_window_text_utf8(HWND hwnd) const
     WCHAR buf[512]{};
     const int n = GetWindowTextW(hwnd, buf, static_cast<int>(sizeof(buf) / sizeof(buf[0])));
     if (n <= 0) return {};
-    return utf16_to_utf8(buf, n);
+    return wide_to_utf8(std::wstring(buf, buf + n));
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -240,7 +234,7 @@ std::string window_ops::get_window_class_utf8(HWND hwnd) const
     WCHAR buf[256]{};
     const int n = GetClassNameW(hwnd, buf, static_cast<int>(sizeof(buf) / sizeof(buf[0])));
     if (n <= 0) return {};
-    return utf16_to_utf8(buf, n);
+    return wide_to_utf8(std::wstring(buf, buf + n));
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -279,6 +273,26 @@ window_ops::window_info window_ops::snapshot(HWND hwnd) const
 
 /////////////////////////////////////////////////////////////////////////////
 /// @说明
+///          枚举所有顶层 HWND（EnumWindows），策略层避免直接调用 Win32。
+/// @参数
+///          visitor--返回 true 继续枚举，false 停止
+///
+/// @时间    2026/4/16
+/////////////////////////////////////////////////////////////////////////////
+void window_ops::enumerate_top_level_windows(const std::function<bool(HWND hwnd)>& visitor) const
+{
+    if (!visitor) return;
+    EnumWindows(
+        [](HWND hwnd, LPARAM lp) -> BOOL {
+            auto* fn = reinterpret_cast<const std::function<bool(HWND)>*>(lp);
+            if (!fn || !*fn) return TRUE;
+            return (*fn)(hwnd) ? TRUE : FALSE;
+        },
+        reinterpret_cast<LPARAM>(&visitor));
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/// @说明
 ///          枚举指定 PID 的可见顶层窗口（用于 surfaces/capture）
 /// @参数
 ///          pid--目标进程 PID
@@ -292,36 +306,20 @@ std::vector<window_ops::window_info> window_ops::enumerate_visible_top_level(DWO
     std::vector<window_info> out;
     if (pid == 0) return out;
 
-    struct ctx {
-        DWORD target_pid = 0;
-        std::vector<window_info>* windows = nullptr;
-        int next_z = 0;
-        const window_ops* ops = nullptr;
-    } c{pid, &out, 0, this};
+    int next_z = 0;
+    enumerate_top_level_windows([&](HWND hwnd) -> bool {
+        const DWORD win_pid = get_window_pid(hwnd);
+        if (win_pid != pid) return true;
+        if (!is_visible(hwnd)) return true;
 
-    EnumWindows(
-        [](HWND hwnd, LPARAM lp) -> BOOL {
-            auto* c = reinterpret_cast<ctx*>(lp);
-            if (!c || !c->windows || !c->ops) return TRUE;
+        const std::string cls = get_window_class_utf8(hwnd);
+        if (cls == "IME" || cls == "MSCTFIME UI" || cls == "SoPY_Status") return true;
 
-            DWORD win_pid = 0;
-            GetWindowThreadProcessId(hwnd, &win_pid);
-            if (win_pid != c->target_pid) return TRUE;
-            if (!IsWindowVisible(hwnd)) return TRUE;
-
-            // Filter input method windows by class name (legacy behavior).
-            char class_name[256] = {0};
-            GetClassNameA(hwnd, class_name, sizeof(class_name));
-            if (std::strcmp(class_name, "IME") == 0) return TRUE;
-            if (std::strcmp(class_name, "MSCTFIME UI") == 0) return TRUE;
-            if (std::strcmp(class_name, "SoPY_Status") == 0) return TRUE;
-
-            window_info info = c->ops->snapshot(hwnd);
-            info.z_order = c->next_z++;
-            c->windows->push_back(std::move(info));
-            return TRUE;
-        },
-        reinterpret_cast<LPARAM>(&c));
+        window_info info = snapshot(hwnd);
+        info.z_order = next_z++;
+        out.push_back(std::move(info));
+        return true;
+    });
 
     return out;
 }
@@ -344,6 +342,7 @@ bool window_ops::query_dwm_attribute_dword(HWND, DWORD, DWORD& out_value) const
     return false;
 }
 std::vector<window_ops::window_info> window_ops::enumerate_visible_top_level(DWORD) const { return {}; }
+void window_ops::enumerate_top_level_windows(const std::function<bool(HWND hwnd)>&) const {}
 window_ops::window_info window_ops::snapshot(HWND) const { return window_info{}; }
 
 #endif

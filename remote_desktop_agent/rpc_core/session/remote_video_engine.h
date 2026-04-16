@@ -19,9 +19,9 @@
 #include "capture/capture_kind_resolver.h"
 #include "capture/i_capture_source.h"
 #include "capture/process_ui_capture.h"
+#include "capture/capture_grab_outcome.h"
 #include "session/remote_capture_telemetry.h"
-
-class RemoteProcessSession;
+#include "common/process_ops.h"
 
 class VideoEncodePipeline;
 
@@ -29,9 +29,7 @@ class VideoEncodePipeline;
 class remote_video_engine {
 public:
     using window_missing_fn = std::function<void(const char* why, uint64_t missing_ms)>;
-    remote_video_engine(std::string exe_path,
-                        std::function<void()> on_remote_process_exit,
-                        window_missing_fn on_window_missing);
+    remote_video_engine(std::string exe_path,  std::function<void()> on_remote_process_exit, window_missing_fn on_window_missing);
     ~remote_video_engine();
 
     void start();
@@ -51,6 +49,8 @@ private:
     void apply_emit_fail_policy(rtc::binary& out_sample, bool request_idr);
 
     void reset_for_session_start();
+    /// start + detach PROCESS_INFORMATION + 选主窗；失败返回 false。
+    bool launch_attached_remote_process();
     void try_recover_main_window();
     void fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const;
     /// 对远程主窗口执行一次最大化 + 置顶（每会话每个 HWND 仅做一次，可经 RPC_LAUNCH_WINDOW_* 关闭）。
@@ -58,15 +58,11 @@ private:
 
     struct CapturedFrame {
         uint64_t frame_id = 0;
+        // Capture-complete absolute unix ms (epoch ms).
         uint64_t unix_ms = 0;
         std::chrono::steady_clock::time_point t_cap_begin{};
         std::chrono::steady_clock::time_point t_cap_done{};
-        int width = 0;
-        int height = 0;
-        int cap_min_left = 0;
-        int cap_min_top = 0;
-        bool used_hw_capture = false;
-        std::vector<uint8_t> rgb;
+		CaptureGrabOutcome grab_outcome;
     };
 
     struct LatestFrameSlot {
@@ -79,7 +75,10 @@ private:
 
     struct EncodedSample {
         uint64_t frame_id = 0;
+        // Encode-complete absolute unix ms (epoch ms).
         uint64_t unix_ms = 0;
+        // Capture-complete absolute unix ms (epoch ms).
+        uint64_t cap_unix_ms = 0;
         uint32_t capture_ms = 0;
         uint32_t encode_ms = 0;
         rtc::binary sample;
@@ -98,7 +97,7 @@ private:
 
     void capture_loop();
     void encode_loop();
-
+private:
     std::string m_exe_path;
     std::function<void()> m_on_remote_process_exit;
     window_missing_fn m_on_window_missing;
@@ -126,13 +125,13 @@ private:
     std::mutex m_last_enc_mtx;
     uint32_t m_last_capture_ms = 0;
     uint32_t m_last_encode_ms = 0;
+    uint64_t m_last_capture_unix_ms = 0;
     uint64_t m_last_frame_unix_ms = 0;
-    bool m_last_used_hw_capture = false;
     int m_last_capture_w = 0;
     int m_last_capture_h = 0;
 
-    std::unique_ptr<RemoteProcessSession> m_process_session;
-    std::string m_target_exe_base_name;
+	std::unique_ptr<process_ops> m_process_ops;
+
     bool m_allow_pid_rebind_by_exename = true;
     uint64_t m_pid_rebind_deadline_unix_ms = 0;
 
@@ -158,7 +157,6 @@ private:
     std::mutex m_last_good_sample_mtx;
     rtc::binary m_last_good_video_sample;
     std::atomic<bool> m_have_last_good_sample{false};
-
     std::vector<uint8_t> m_last_good_rgb_frame;
     int m_last_good_rgb_w = 0;
     int m_last_good_rgb_h = 0;

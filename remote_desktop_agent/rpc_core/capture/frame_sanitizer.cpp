@@ -6,14 +6,7 @@
 #include <chrono>
 #include <iostream>
 
-bool FrameSanitizer::sanitize_frame(std::vector<uint8_t>& frame,
-                                    int& width,
-                                    int& height,
-                                    bool had_successful_video,
-                                    bool have_last_good_sample,
-                                    const std::vector<uint8_t>& last_good_rgb_frame,
-                                    int last_good_rgb_w,
-                                    int last_good_rgb_h)
+bool FrameSanitizer::sanitize_frame(std::vector<uint8_t>& frame, int& width, int& height, bool had_successful_video, bool have_last_good_sample, const std::vector<uint8_t>& last_good_rgb_frame, int last_good_rgb_w, int last_good_rgb_h)
 {
     // 步骤 1：读取是否启用「可疑帧/黑帧」过滤（可由 RPC_FILTER_CAPTURE_BLACK_FRAMES 关闭）。
     const bool filter_black = runtime_config::get_bool("RPC_FILTER_CAPTURE_BLACK_FRAMES", true);

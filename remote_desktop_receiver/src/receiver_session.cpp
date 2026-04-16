@@ -35,7 +35,7 @@ static std::string RandomId(size_t length) {
 }
 
 int ReceiverMain(int argc, char** argv) {
-	std::string host = "127.0.0.1";
+	std::string host = "192.168.3.15";
 	int port = 9090;
 	std::string clientId;
 	std::string exePath = "C:\\Windows\\System32\\notepad.exe";
@@ -179,9 +179,16 @@ int ReceiverMain(int argc, char** argv) {
 	});
 	t.detach();
 
-	std::optional<uint64_t> baseSeq;
-	uint64_t displayedFrameCount = 0;
 	uint64_t lastShownDecodedIndex = 0;
+	uint64_t frameCapMs = 0;
+	uint64_t frameEncMs = 0;
+	uint64_t frameSendMs = 0;
+	bool haveFrameAgentTimes = false;
+	uint64_t frameId = 0;
+
+	uint64_t frameRxMs = 0;
+	uint64_t frameDecDoneMs = 0;
+	bool haveFrameRxDecTimes = false;
 
 	std::vector<uint8_t> localBgra;
 
@@ -212,12 +219,23 @@ int ReceiverMain(int argc, char** argv) {
 					w = g_sharedFrame.w;
 					h = g_sharedFrame.h;
 					decodedIndex = g_sharedFrame.decodedIndex;
+					frameId = g_sharedFrame.frameId;
+					haveFrameAgentTimes = g_sharedFrame.hasAgentTimes;
+					frameCapMs = g_sharedFrame.capMs;
+					frameEncMs = g_sharedFrame.encMs;
+					frameSendMs = g_sharedFrame.sendMs;
+
+					haveFrameRxDecTimes = g_sharedFrame.hasRxDecTimes;
+					frameRxMs = g_sharedFrame.rxMs;
+					frameDecDoneMs = g_sharedFrame.decDoneMs;
 					if (g_sharedFrame.hasDecodeQueuedSteady) {
 						decodeQueuedSteady = g_sharedFrame.decodeQueuedSteady;
 						haveDecodeQueuedSteady = true;
 						g_sharedFrame.hasDecodeQueuedSteady = false;
 					}
 					localBgra.swap(g_sharedFrame.bgra);
+					g_sharedFrame.hasAgentTimes = false;
+					g_sharedFrame.hasRxDecTimes = false;
 					g_sharedFrame.ready = false;
 					lastShownDecodedIndex = decodedIndex;
 				}
@@ -321,63 +339,62 @@ int ReceiverMain(int argc, char** argv) {
 
 		double thetaLocal = 0.0;
 		bool hasTheta = false;
-		uint64_t lastSeqLocal = 0;
-		uint64_t lastSrvLocal = 0;
 		{
 			std::lock_guard<std::mutex> lk(g_latency.mtx);
 			hasTheta = g_latency.thetaMs.has_value();
 			thetaLocal = hasTheta ? g_latency.thetaMs.value() : 0.0;
-			if (g_latency.hasLastFrameMark) {
-				lastSeqLocal = g_latency.lastFrameMarkSeq;
-				lastSrvLocal = g_latency.lastFrameMarkSrvMs;
-			}
 		}
 
-		uint64_t srvMsUsed = 0;
-		uint64_t visibleSeq = 0;
-		if (!baseSeq.has_value() && g_latency.hasLastFrameMark) {
-			baseSeq = lastSeqLocal;
-			displayedFrameCount = 0;
+		double capToPresentMs = 0.0;
+		double encToPresentMs = 0.0;
+		double sendToPresentMs = 0.0;
+		if (haveFrameAgentTimes && hasTheta) {
+			capToPresentMs = (double)presentMs - (double)frameCapMs + thetaLocal;
+			encToPresentMs = (double)presentMs - (double)frameEncMs + thetaLocal;
+			sendToPresentMs = (double)presentMs - (double)frameSendMs + thetaLocal;
 		}
-		if (baseSeq.has_value()) {
-			visibleSeq = baseSeq.value() + displayedFrameCount;
-			uint64_t srv = 0;
-			bool found = false;
+
+		double rxToDecMs = 0.0;
+		double decToPresentMs = 0.0;
+		if (haveFrameRxDecTimes) {
+			rxToDecMs = (double)frameDecDoneMs - (double)frameRxMs;
+			decToPresentMs = (double)presentMs - (double)frameDecDoneMs;
+		}
+
+		{
+			static std::chrono::steady_clock::time_point s_last_visible_log{};
+			const auto nowSteady = std::chrono::steady_clock::now();
+			//if (nowSteady - s_last_visible_log >= std::chrono::seconds(1)) 
 			{
-				std::lock_guard<std::mutex> lk(g_latency.mtx);
-				auto it = g_latency.srvMsBySeq.find(visibleSeq);
-				if (it != g_latency.srvMsBySeq.end()) {
-					srv = it->second;
-					found = true;
-				} else if (g_latency.hasLastFrameMark) {
-					srv = g_latency.lastFrameMarkSrvMs;
-					found = false;
-				}
+				s_last_visible_log = nowSteady;
+				Logf("[latency][seg] idx=%llu frameId=%llu cap->present=%.1fms enc->present=%.1fms send->present=%.1fms rx->dec=%.1fms dec->present=%.1fms theta=%.1fms\n",
+					(unsigned long long)decodedIndex,
+					(unsigned long long)frameId,
+					capToPresentMs,
+					encToPresentMs,
+					sendToPresentMs,
+					rxToDecMs,
+					decToPresentMs,
+					thetaLocal);
 			}
-			srvMsUsed = srv;
-			(void)found;
-		} else {
-			srvMsUsed = lastSrvLocal;
-			visibleSeq = lastSeqLocal;
 		}
-
-		double visibleDelayMs = hasTheta ? ((double)presentMs - (double)srvMsUsed + thetaLocal) : 0.0;
 
 		wchar_t title[256]{};
-		if (baseSeq.has_value() && hasTheta) {
+		if (haveFrameAgentTimes && hasTheta) {
 			std::swprintf(
-				title, 256, L"%ls | seq=%I64u delay~%.1fms (theta=%.1fms)",
-				rdr::kDefaultWindowTitle, (unsigned __int64)visibleSeq, visibleDelayMs, thetaLocal);
-		} else if (g_latency.hasLastFrameMark && hasTheta) {
-			std::swprintf(
-				title, 256, L"%ls | delay~%.1fms (theta=%.1fms)",
-				rdr::kDefaultWindowTitle, visibleDelayMs, thetaLocal);
+				title, 256, L"%ls | cap->present %.1fms (enc %.1fms send %.1fms) theta=%.1fms frameId=%I64u",
+				rdr::kDefaultWindowTitle,
+				capToPresentMs,
+				encToPresentMs,
+				sendToPresentMs,
+				thetaLocal,
+				(unsigned __int64)frameId);
+		} else if (hasTheta) {
+			std::swprintf(title, 256, L"%ls | waiting SEI times...", rdr::kDefaultWindowTitle);
 		} else {
 			std::swprintf(title, 256, L"%ls | waiting latPong/align...", rdr::kDefaultWindowTitle);
 		}
 		SetWindowTextW(g_hwnd, title);
-
-		displayedFrameCount++;
 	}
 
 	g_exitRequested.store(true, std::memory_order_relaxed);

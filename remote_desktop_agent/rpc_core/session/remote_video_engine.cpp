@@ -1,7 +1,5 @@
 #include "session/remote_video_engine.h"
 
-#include "session/remote_process_session.h"
-
 #include "app/runtime_config.h"
 #include "capture/capture_init_context.h"
 #include "capture/capture_source_factory.h"
@@ -9,6 +7,7 @@
 #include "capture/process_ui_capture.h"
 #include "common/rpc_time.h"
 #include "common/window_ops.h"
+#include "common/character_conversion.h"
 #include "encode/video_encode_pipeline.h"
 #include "input/input_controller.h"
 #include "common/process_ops.h"
@@ -54,14 +53,12 @@ HWND primary_hwnd_from_surfaces(const std::vector<window_ops::window_info>& surf
 
 } // namespace
 
-remote_video_engine::remote_video_engine(std::string exe_path,
-                                         std::function<void()> on_remote_process_exit,
-                                         remote_video_engine::window_missing_fn on_window_missing)
+remote_video_engine::remote_video_engine(std::string exe_path, std::function<void()> on_remote_process_exit, remote_video_engine::window_missing_fn on_window_missing)
     : m_exe_path(std::move(exe_path))
     , m_on_remote_process_exit(std::move(on_remote_process_exit))
     , m_on_window_missing(std::move(on_window_missing))
 {
-    m_process_session = std::make_unique<RemoteProcessSession>();
+    m_process_ops = std::make_unique<process_ops>();
 
     m_video_encode_pipeline = std::make_unique<VideoEncodePipeline>();
     m_bmp_dump.configure_from_config();
@@ -73,7 +70,7 @@ remote_video_engine::remote_video_engine(std::string exe_path,
     m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
 
     const std::string backend_cfg =
-        ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
+        to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
     const CaptureKindResolveResult resolved = resolve_capture_kind(backend_cfg);
     m_capture_explicit_backend_error = resolved.explicit_backend_unavailable;
     if (m_capture_explicit_backend_error) {
@@ -99,17 +96,15 @@ bool remote_video_engine::is_remote_process_still_running() const
 {
     // Prefer the original launch handle when available.
     if (m_pi.hProcess) {
-        process_ops ops;
         DWORD exit_code = 0;
-        if (ops.get_exit_code(m_pi.hProcess, exit_code) && exit_code == STILL_ACTIVE) {
+        if (m_process_ops->get_exit_code(m_pi.hProcess, exit_code) && exit_code == STILL_ACTIVE) {
             return true;
         }
     }
     const DWORD cap = m_capture_pid;
     const DWORD launch = m_launch_pid;
-    process_ops ops;
-    if (cap != 0 && ops.is_running(cap)) return true;
-    if (launch != 0 && ops.is_running(launch)) return true;
+    if (m_process_ops != 0 && m_process_ops->is_running(cap)) return true;
+    if (launch != 0 && m_process_ops->is_running(launch)) return true;
     return false;
 }
 
@@ -142,32 +137,28 @@ void remote_video_engine::start()
 {
     if (m_running.exchange(true)) return;
 
-    if (!m_process_session) return;
+    if (!m_process_ops) return;
 
     if (m_capture_explicit_backend_error) {
-        const std::string req = ProcessUiCapture::to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", ""));
+        const std::string req = to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", ""));
         std::cout << "[capture] abort session start: explicit RPC_CAPTURE_BACKEND=" << req
                   << " unavailable (strict, no GDI fallback). Set RPC_CAPTURE_BACKEND=auto or gdi.\n";
         m_running = false;
         return;
     }
 
-    m_capture_pid = 0;
-    m_launch_pid = 0;
     m_main_window = nullptr;
 
     reset_for_session_start();
 
-    std::string target_base;
     m_pi = {};
     m_launch_pid = 0;
     m_capture_pid = 0;
     m_main_window = nullptr;
-    if (!m_process_session->launch_process(m_exe_path, m_pi, m_launch_pid, m_capture_pid, m_main_window, target_base)) {
+    if (!launch_attached_remote_process()) {
         m_running = false;
         return;
     }
-    m_target_exe_base_name = target_base;
     m_pid_rebind_deadline_unix_ms = rpc_unix_epoch_ms() + 5000;
 
     m_ui_capture_options = ProcessUiCapture::load_layout_options_from_config();
@@ -214,10 +205,10 @@ void remote_video_engine::stop()
     input_controller::instance()->set_capture_screen_rect(0, 0, 0, 0);
 
     try {
-        if (m_process_session && m_pi.hProcess) {
+        if (m_process_ops && m_pi.hProcess) {
             std::cout << "[proc] stop: terminating processes launch_pid=" << m_launch_pid
                       << " capture_pid=" << m_capture_pid << std::endl;
-            m_process_session->terminate_processes(m_pi, m_capture_pid, m_launch_pid);
+            m_process_ops->terminate_detached_launch(m_pi, m_capture_pid, m_launch_pid, 0);
         }
     } catch (...) {
     }
@@ -255,14 +246,13 @@ void remote_video_engine::exit_watch_loop()
         }
 
         if (window_owner_pid != 0) {
-            process_ops ops;
-            auto h = ops.open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
+            auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
             if (!h) {
                 notify_remote_exit_if_needed("main_window_owner_open_failed");
                 break;
             }
             DWORD exit_code = 0;
-            if (!ops.get_exit_code(h.get(), exit_code)) {
+            if (!m_process_ops->get_exit_code(h.get(), exit_code)) {
                 notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
                 break;
             }
@@ -272,15 +262,13 @@ void remote_video_engine::exit_watch_loop()
             }
         } else if (m_pi.hProcess) {
             DWORD exit_code = 0;
-            process_ops ops;
-            const bool ok = ops.get_exit_code(m_pi.hProcess, exit_code);
+            const bool ok = m_process_ops->get_exit_code(m_pi.hProcess, exit_code);
             if (ok && exit_code != STILL_ACTIVE) {
                 const DWORD cap = m_capture_pid;
                 const DWORD launch = m_launch_pid;
                 const bool capturing_child =
-                    (cap != 0 && cap != launch && process_ops().is_running(cap));
-                const bool still_in_rebind_grace =
-                    rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
+                    (cap != 0 && cap != launch && m_process_ops->is_running(cap));
+                const bool still_in_rebind_grace =  rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
                 if (capturing_child || still_in_rebind_grace) {
                 } else {
                     notify_remote_exit_if_needed("launch_process_exited");
@@ -323,7 +311,7 @@ void remote_video_engine::capture_loop()
     while (m_threads_running.load(std::memory_order_acquire)) {
         const auto now_unix_ms = rpc_unix_epoch_ms();
 
-        if (!m_process_session || !m_capture_source) {
+        if (!m_process_ops || !m_capture_source) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
@@ -345,6 +333,10 @@ void remote_video_engine::capture_loop()
                     m_threads_running.store(false, std::memory_order_release);
                 }
             }
+            std::cout << "[capture] no surfaces found for pid=" << m_capture_pid
+                      << " main_window=" << static_cast<void*>(m_main_window)
+                      << " notify_remote_exit_if_needed=" << notify
+				<< std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
             continue;
         }
@@ -366,6 +358,9 @@ void remote_video_engine::capture_loop()
             const bool keep = FrameSanitizer::sanitize_frame(outcome.frame, outcome.width, outcome.height, had_successful_video, !last_good_rgb.empty(), last_good_rgb, last_good_w, last_good_h);
 
             if (keep) {
+                // Absolute unix-ms timestamp at "capture-complete" moment (used for per-frame SEI timestamps).
+                const uint64_t cap_done_unix_ms = rpc_unix_epoch_ms();
+
                 input_controller::instance()->set_capture_screen_rect(outcome.cap_min_left, outcome.cap_min_top, outcome.width, outcome.height);
 
                 const BmpDumpDiag bmp_diag = make_bmp_dump_diag(outcome);
@@ -380,15 +375,11 @@ void remote_video_engine::capture_loop()
                 // Store latest frame with overwrite semantics.
                 CapturedFrame cf;
                 cf.frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-                cf.unix_ms = now_unix_ms;
+                cf.unix_ms = cap_done_unix_ms;
                 cf.t_cap_begin = t_cap_begin;
                 cf.t_cap_done = t_after_cap;
-                cf.width = outcome.width;
-                cf.height = outcome.height;
-                cf.cap_min_left = outcome.cap_min_left;
-                cf.cap_min_top = outcome.cap_min_top;
-                cf.used_hw_capture = outcome.used_hw_capture;
-                cf.rgb = std::move(outcome.frame);
+				cf.grab_outcome = outcome;
+				cf.grab_outcome.frame = std::move(outcome.frame); // ensure frame data moves with the outcome for potential diagnostics.
 
                 {
                     std::lock_guard<std::mutex> lk(m_latest_frame.mtx);
@@ -422,55 +413,52 @@ void remote_video_engine::encode_loop()
     while (m_threads_running.load(std::memory_order_acquire)) {
         std::optional<CapturedFrame> frame;
         {
+            //1.等待新帧（最多 50ms）
             std::unique_lock<std::mutex> lk(m_latest_frame.mtx);
             m_latest_frame.cv.wait_for(lk, std::chrono::milliseconds(50), [&] {
-                return !m_threads_running.load(std::memory_order_acquire) ||
-                       (m_latest_frame.latest.has_value() && m_latest_frame.latest->frame_id != last_encoded_id);
+                return !m_threads_running.load(std::memory_order_acquire) || (m_latest_frame.latest.has_value() && m_latest_frame.latest->frame_id != last_encoded_id);
             });
             if (!m_threads_running.load(std::memory_order_acquire)) break;
             if (!m_latest_frame.latest.has_value()) continue;
             if (m_latest_frame.latest->frame_id == last_encoded_id) continue;
-
-            // Take a snapshot of the latest (copy/move rgb to avoid holding lock during encode).
+            
+            //2.“拿走最新帧”并立即释放锁Take a snapshot of the latest (copy/move rgb to avoid holding lock during encode).
             frame = std::move(m_latest_frame.latest.value());
             // Keep the slot populated with an empty placeholder so overwrite count remains meaningful.
             m_latest_frame.latest.reset();
         }
 
+        //3.确认编码管线存在
         if (!frame.has_value() || !m_video_encode_pipeline) continue;
 
+		if (m_latest_encoded.q.size() > 3) continue;//如果编码队列里积压了过多样本，先不编码新帧了，等消费者把队列吃掉一些再说。这是为了防止编码过慢时���存占用持续增长。
         CapturedFrame& cf = frame.value();
         last_encoded_id = cf.frame_id;
 
-        int target_w = cf.width;
-        int target_h = cf.height;
+        int target_w = cf.grab_outcome.width;
+        int target_h = cf.grab_outcome.height;
         bool applied_layout = false;
-        const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout(
-            cf.width, cf.height, m_had_successful_video.load(std::memory_order_relaxed), target_w, target_h, applied_layout);
-        if (!layout_ok) {
-            continue;
-        }
+        //4.确保编码器布局/分辨率策略一致
+        const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout( cf.grab_outcome.width, cf.grab_outcome.height, m_had_successful_video.load(std::memory_order_relaxed), target_w, target_h, applied_layout);
+        if (!layout_ok) continue;
 
-        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(
-            cf.rgb,
-            cf.width,
-            cf.height,
-            applied_layout,
-            cf.t_cap_begin,
-            cf.t_cap_done);
+        //5.编码
+        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(cf.grab_outcome.frame, cf.grab_outcome.width, cf.grab_outcome.height, applied_layout, cf.t_cap_begin, cf.t_cap_done);
 
         if (enc.encode_ok && !enc.sample.empty() && !enc.invalid_payload) {
             EncodedSample es;
             es.frame_id = cf.frame_id;
+            es.cap_unix_ms = cf.unix_ms;
             es.unix_ms = enc.frame_unix_ms ? enc.frame_unix_ms : cf.unix_ms;
             es.capture_ms = enc.capture_ms;
             es.encode_ms = enc.encode_ms;
             es.sample = std::move(enc.sample);
-            es.used_hw_capture = cf.used_hw_capture;
+            es.used_hw_capture = cf.grab_outcome.used_hw_capture;
             es.w = target_w;
             es.h = target_h;
 
             {
+                //5.1 推入最新编码队列
                 std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
                 while (m_latest_encoded.q.size() >= m_latest_encoded.capacity) {
                     m_latest_encoded.q.pop_front();
@@ -481,17 +469,19 @@ void remote_video_engine::encode_loop()
             }
 
             {
+                //更新编码遥测快照
                 std::lock_guard<std::mutex> lk(m_last_enc_mtx);
                 m_last_capture_ms = es.capture_ms;
                 m_last_encode_ms = es.encode_ms;
+                m_last_capture_unix_ms = es.cap_unix_ms;
                 m_last_frame_unix_ms = es.unix_ms;
-                m_last_used_hw_capture = es.used_hw_capture;
                 m_last_capture_w = es.w;
                 m_last_capture_h = es.h;
             }
 
             // Update last good sample for steady-hold mode.
             {
+                //更新 steady-hold 所需的“最后一份好样本”
                 std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);
                 m_last_good_video_sample = es.sample;
             }
@@ -499,9 +489,7 @@ void remote_video_engine::encode_loop()
             m_had_successful_video.store(true, std::memory_order_relaxed);
         } else {
             // If encode fails but we already have a good sample, request keyframe to recover quickly.
-            if (m_have_last_good_sample.load(std::memory_order_relaxed)) {
-                request_force_keyframe();
-            }
+            if (m_have_last_good_sample.load(std::memory_order_relaxed))  request_force_keyframe();
         }
     }
 }
@@ -512,30 +500,39 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     out_sample.clear();
     out_telemetry = remote_capture_telemetry{};
 
+    //1.写入基础遥测
     const uint64_t now_unix_ms = rpc_unix_epoch_ms();
     out_telemetry.last_frame_unix_ms = now_unix_ms;
     fill_capture_backend_telemetry(out_telemetry);
 
-    // Pop latest encoded sample (no blocking). If none, apply steady-hold fallback policy.
+    //2.无阻塞地“取走最新编码样本”Pop latest encoded sample (no blocking). If none, apply steady-hold fallback policy.
     EncodedSample es;
     bool have = false;
     {
         std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
         if (!m_latest_encoded.q.empty()) {
-            es = std::move(m_latest_encoded.q.back());
-            m_latest_encoded.q.clear();
+            es = std::move(m_latest_encoded.q.front());
+			m_latest_encoded.q.pop_front();
+
+            //es = std::move(m_latest_encoded.q.back());
+            //m_latest_encoded.q.clear();
             have = true;
         }
     }
 
+    //3.若拿到了有效样本：填充输出并返回
     if (have && !es.sample.empty()) {
         out_sample = std::move(es.sample);
+        //把编码线程产出的遥测写到
         out_telemetry.last_capture_ms = es.capture_ms;
         out_telemetry.last_encode_ms = es.encode_ms;
+        out_telemetry.last_capture_unix_ms = es.cap_unix_ms;
+        out_telemetry.last_encode_unix_ms = es.unix_ms;
         out_telemetry.last_frame_unix_ms = es.unix_ms ? es.unix_ms : now_unix_ms;
         out_telemetry.capture_width = es.w;
         out_telemetry.capture_height = es.h;
 
+        //每秒一次打印队列统计日志
         static auto s_last_diag = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         if (now - s_last_diag >= std::chrono::seconds(1)) {
@@ -566,12 +563,15 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         return;
     }
 
-    // No fresh sample; reuse last good sample if configured.
+    // 否则：走“稳帧兜底（steady-hold）”并用上一次遥测,No fresh sample; reuse last good sample if configured.
     apply_emit_fail_policy(out_sample, false);
     {
+        //加锁 m_last_enc_mtx，用上一次成功编码的快照填 out_telemetry：
         std::lock_guard<std::mutex> lk(m_last_enc_mtx);
         out_telemetry.last_capture_ms = m_last_capture_ms;
         out_telemetry.last_encode_ms = m_last_encode_ms;
+        out_telemetry.last_capture_unix_ms = m_last_capture_unix_ms;
+        out_telemetry.last_encode_unix_ms = m_last_frame_unix_ms;
         out_telemetry.last_frame_unix_ms = m_last_frame_unix_ms ? m_last_frame_unix_ms : now_unix_ms;
         out_telemetry.capture_width = m_last_capture_w;
         out_telemetry.capture_height = m_last_capture_h;
@@ -597,6 +597,10 @@ void remote_video_engine::reset_for_session_start()
     m_last_launch_placement_hwnd = nullptr;
 
     m_had_successful_video.store(false, std::memory_order_relaxed);
+    m_last_capture_ms = 0;
+    m_last_encode_ms = 0;
+    m_last_capture_unix_ms = 0;
+    m_last_frame_unix_ms = 0;
     {
         std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);
         m_last_good_video_sample.clear();
@@ -616,23 +620,40 @@ void remote_video_engine::reset_for_session_start()
 
 void remote_video_engine::try_recover_main_window()
 {
-    if (!m_process_session) return;
+    if (!m_process_ops) return;
 
-    if (m_main_window && m_process_session->is_window_viable_for_capture(m_main_window)) return;
+    if (m_main_window && SessionHealthPolicy::is_window_viable_for_capture(m_main_window)) return;
     m_main_window = nullptr;
 
-    if (m_target_exe_base_name.empty()) return;
+    std::string exe_base_name = m_process_ops->target_exe_base_name_lower();
+    if (exe_base_name.empty()) return;
 
     m_main_window = SessionHealthPolicy::try_recover_main_window(
-        *m_process_session,
+        *m_process_ops,
         m_launch_pid,
         m_capture_pid,
-        m_target_exe_base_name,
+        exe_base_name,
         m_allow_pid_rebind_by_exename,
         m_had_successful_video.load(std::memory_order_relaxed),
         m_pid_rebind_deadline_unix_ms);
 
     apply_launch_window_placement(m_main_window);
+}
+
+bool remote_video_engine::launch_attached_remote_process()
+{
+    if (!m_process_ops) return false;
+    if (!m_process_ops->start(m_exe_path, 0, true)) {
+        return false;
+    }
+
+    m_launch_pid = m_process_ops->launch_pid();
+    m_capture_pid = m_process_ops->capture_pid();
+    m_process_ops->detach_launch_process_info(m_pi);
+
+    // 不要因等待窗口而阻塞流创建。
+    m_main_window = SessionHealthPolicy::find_main_window(m_launch_pid);
+    return true;
 }
 
 void remote_video_engine::apply_launch_window_placement(HWND hwnd)

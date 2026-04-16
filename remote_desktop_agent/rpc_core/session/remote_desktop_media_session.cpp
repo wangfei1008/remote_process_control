@@ -49,8 +49,7 @@ remote_desktop_media_session::remote_desktop_media_session(std::string exe_path,
 {
     m_impl = std::make_unique<remote_desktop_media_session_impl>();
 
-    m_impl->m_video_engine =
-        std::make_shared<remote_video_engine>(m_exe_path, m_on_remote_process_exit, m_on_window_missing);
+    m_impl->m_video_engine = std::make_shared<remote_video_engine>(m_exe_path, m_on_remote_process_exit, m_on_window_missing);
     m_impl->m_audio_generator = std::make_shared<silence_opus_generator>(m_impl->m_audio_frame_duration_us);
 
     auto snapshot_clients = [this]() -> std::vector<std::shared_ptr<ClientPeerConnection>> {

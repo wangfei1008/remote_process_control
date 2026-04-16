@@ -6,6 +6,7 @@
 #include "receiver_context.hpp"
 #include "rdr_log.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -41,6 +42,117 @@ static double SmoothEwma(std::optional<double>& prev, double sample, double alph
 	if (!prev.has_value()) prev = sample;
 	else prev = prev.value() * (1.0 - alpha) + sample * alpha;
 	return prev.value();
+}
+
+// Custom per-frame telemetry carried in H264 SEI (user_data_unregistered).
+// Layout (rbsp user_data_unregistered):
+//   payloadType=5, payloadSize >= 16(uuid)+1(version)+8(frameId)+8(capMs)+8(encMs)+8(sendMs)
+// We extract all 4 agent timestamps so receiver can segment delays.
+static bool ExtractRpcLatencySeiFieldsFromAnnexB(
+	const uint8_t* buf,
+	size_t len,
+	uint64_t& outFrameId,
+	uint64_t& outCapMs,
+	uint64_t& outEncMs,
+	uint64_t& outSendMs
+) {
+	static constexpr std::array<uint8_t, 16> kUuid = {
+		0x52, 0x50, 0x43, 0x2D, 0x4C, 0x41, 0x54, 0x45,
+		0x4E, 0x43, 0x59, 0x2D, 0x53, 0x45, 0x49, 0x31
+	}; // "RPC-LATENCY-SEI1"
+
+	auto findStartCode = [&](size_t from, size_t& scPos, size_t& scLen) -> bool {
+		for (size_t i = from; i + 3 <= len; ++i) {
+			if (buf[i] == 0x00 && buf[i + 1] == 0x00) {
+				if (buf[i + 2] == 0x01) { scPos = i; scLen = 3; return true; }
+				if (i + 3 < len && buf[i + 2] == 0x00 && buf[i + 3] == 0x01) { scPos = i; scLen = 4; return true; }
+			}
+		}
+		return false;
+	};
+
+	auto ebspToRbsp = [&](const uint8_t* ebsp, size_t ebspLen, std::vector<uint8_t>& rbsp) {
+		rbsp.clear();
+		rbsp.reserve(ebspLen);
+		int zeroCount = 0;
+		for (size_t i = 0; i < ebspLen; ++i) {
+			const uint8_t b = ebsp[i];
+			if (zeroCount == 2 && b == 0x03) {
+				zeroCount = 0;
+				continue;
+			}
+			rbsp.push_back(b);
+			if (b == 0x00) zeroCount++;
+			else zeroCount = 0;
+		}
+	};
+
+	size_t off = 0;
+	size_t scPos = 0, scLen = 0;
+	while (findStartCode(off, scPos, scLen)) {
+		const size_t nalStart = scPos + scLen;
+		if (nalStart >= len) break;
+		size_t nextPos = 0, nextLen = 0;
+		size_t nalEnd = len;
+		if (findStartCode(nalStart, nextPos, nextLen)) nalEnd = nextPos;
+		if (nalEnd <= nalStart) { off = nalStart; continue; }
+
+		const uint8_t nalHdr = buf[nalStart];
+		const uint8_t nalType = (uint8_t)(nalHdr & 0x1F);
+		if (nalType == 6) {
+			const uint8_t* ebsp = buf + nalStart + 1;
+			const size_t ebspLen = (nalEnd > nalStart + 1) ? (nalEnd - (nalStart + 1)) : 0;
+			std::vector<uint8_t> rbsp;
+			ebspToRbsp(ebsp, ebspLen, rbsp);
+			size_t pos = 0;
+			while (pos < rbsp.size()) {
+				uint32_t payloadType = 0;
+				while (pos < rbsp.size() && rbsp[pos] == 0xFF) { payloadType += 255; pos++; }
+				if (pos >= rbsp.size()) break;
+				payloadType += rbsp[pos++];
+
+				uint32_t payloadSize = 0;
+				while (pos < rbsp.size() && rbsp[pos] == 0xFF) { payloadSize += 255; pos++; }
+				if (pos >= rbsp.size()) break;
+				payloadSize += rbsp[pos++];
+
+				if (pos + payloadSize > rbsp.size()) break;
+				// payloadType=5: user_data_unregistered
+				// uuid(16)+version(1)+frameId(8)+capMs(8)+encMs(8)+sendMs(8) => 49 bytes
+				if (payloadType == 5 && payloadSize >= 49) {
+					const uint8_t* payload = rbsp.data() + pos;
+					bool uuidOk = true;
+					for (size_t i = 0; i < 16; ++i) {
+						if (payload[i] != kUuid[i]) { uuidOk = false; break; }
+					}
+					if (uuidOk) {
+						// payload[16] = version (currently unused)
+						uint64_t frameId = 0;
+						uint64_t capMs = 0;
+						uint64_t encMs = 0;
+						uint64_t sendMs = 0;
+
+						// little-endian uint64s
+						for (int i = 0; i < 8; ++i) frameId |= (uint64_t)payload[17 + i] << (8 * i);
+						for (int i = 0; i < 8; ++i) capMs   |= (uint64_t)payload[25 + i] << (8 * i);
+						for (int i = 0; i < 8; ++i) encMs   |= (uint64_t)payload[33 + i] << (8 * i);
+						for (int i = 0; i < 8; ++i) sendMs  |= (uint64_t)payload[41 + i] << (8 * i);
+
+						outFrameId = frameId;
+						outCapMs = capMs;
+						outEncMs = encMs;
+						outSendMs = sendMs;
+						return capMs != 0 && encMs != 0 && sendMs != 0;
+					}
+				}
+				pos += payloadSize;
+			}
+		}
+
+		off = nalEnd;
+	}
+
+	return false;
 }
 
 static void StartLatencyPingThread() {
@@ -107,17 +219,8 @@ static void HandleDataChannelMessage(const std::string& msg) {
 		return;
 	}
 
+	// frameMark is deprecated: we now embed timestamps in per-frame H264 SEI.
 	if (type == "frameMark") {
-		const uint64_t seq = (uint64_t)j.value("seq", (uint64_t)0);
-		const uint64_t srvMs = (uint64_t)j.value("srvMs", (uint64_t)0);
-		{
-			std::lock_guard<std::mutex> lk(g_latency.mtx);
-			g_latency.srvMsBySeq[seq] = srvMs;
-			g_latency.lastFrameMarkSeq = seq;
-			g_latency.lastFrameMarkSrvMs = srvMs;
-			g_latency.hasLastFrameMark = true;
-			g_latency.prune(seq);
-		}
 		return;
 	}
 
@@ -332,7 +435,33 @@ static std::shared_ptr<rtc::PeerConnection> SetupPeerConnectionForAnswerer(
 
 			const auto t_rx = std::chrono::steady_clock::now();
 			try {
+				// Bind agent SEI timestamps to the decode result.
+				const uint64_t rxMs = SystemMsNow();
+				g_pendingRxMs.store(rxMs, std::memory_order_relaxed);
+				g_pendingRxMsValid.store(true, std::memory_order_release);
+
+				uint64_t seiFrameId = 0;
+				uint64_t seiCapMs = 0;
+				uint64_t seiEncMs = 0;
+				uint64_t seiSendMs = 0;
+				const bool seiOk = looksLikeAnnexB() &&
+					ExtractRpcLatencySeiFieldsFromAnnexB(p, n, seiFrameId, seiCapMs, seiEncMs, seiSendMs);
+				if (seiOk) {
+					g_pendingFrameId.store(seiFrameId, std::memory_order_relaxed);
+					g_pendingCapMs.store(seiCapMs, std::memory_order_relaxed);
+					g_pendingEncMs.store(seiEncMs, std::memory_order_relaxed);
+					g_pendingSendMs.store(seiSendMs, std::memory_order_relaxed);
+					g_pendingSeiValid.store(true, std::memory_order_release);
+				} else {
+					g_pendingSeiValid.store(false, std::memory_order_release);
+				}
+
 				bool decoded = decoder.decodeAnnexB(p, n);
+				if (!decoded) {
+					// Avoid leaking pending timestamps into a later successful decode.
+					g_pendingSeiValid.store(false, std::memory_order_release);
+					g_pendingRxMsValid.store(false, std::memory_order_release);
+				}
 				if (!decoded && !looksLikeAnnexB()) {
 					std::vector<uint8_t> annexb;
 					annexb.reserve(n + (n / 4) * 4);
@@ -351,7 +480,28 @@ static std::shared_ptr<rtc::PeerConnection> SetupPeerConnectionForAnswerer(
 						off += size_t(len);
 					}
 					if (ok && !annexb.empty()) {
+						uint64_t seiFrameId2 = 0;
+						uint64_t seiCapMs2 = 0;
+						uint64_t seiEncMs2 = 0;
+						uint64_t seiSendMs2 = 0;
+						const bool seiOk2 = ExtractRpcLatencySeiFieldsFromAnnexB(annexb.data(), annexb.size(), seiFrameId2, seiCapMs2, seiEncMs2, seiSendMs2);
+						if (seiOk2) {
+							g_pendingFrameId.store(seiFrameId2, std::memory_order_relaxed);
+							g_pendingCapMs.store(seiCapMs2, std::memory_order_relaxed);
+							g_pendingEncMs.store(seiEncMs2, std::memory_order_relaxed);
+							g_pendingSendMs.store(seiSendMs2, std::memory_order_relaxed);
+							g_pendingSeiValid.store(true, std::memory_order_release);
+						} else {
+							g_pendingSeiValid.store(false, std::memory_order_release);
+						}
+
+							// keep rxMs captured at onFrame callback entry for the final successful decode
+							g_pendingRxMsValid.store(true, std::memory_order_release);
 						decoded = decoder.decodeAnnexB(annexb.data(), annexb.size());
+						if (!decoded) {
+							g_pendingSeiValid.store(false, std::memory_order_release);
+							g_pendingRxMsValid.store(false, std::memory_order_release);
+						}
 						if (decoded && cbn < 5) {
 							Logf("[receiver] decodeAnnexB failed; length->AnnexB decode ok\n");
 						}
@@ -449,12 +599,30 @@ void RdrRunSignalingAndWebRtc(
 					if (!decoder) {
 						auto publish = [](int w, int h, uint64_t decodedIndex, std::vector<uint8_t>&& bgra) {
 							const auto queued = std::chrono::steady_clock::now();
+							const bool haveSei = g_pendingSeiValid.exchange(false, std::memory_order_acq_rel);
+							const uint64_t frameId = haveSei ? g_pendingFrameId.load(std::memory_order_relaxed) : 0;
+							const uint64_t capMs = haveSei ? g_pendingCapMs.load(std::memory_order_relaxed) : 0;
+							const uint64_t encMs = haveSei ? g_pendingEncMs.load(std::memory_order_relaxed) : 0;
+							const uint64_t sendMs = haveSei ? g_pendingSendMs.load(std::memory_order_relaxed) : 0;
+
+							const bool haveRx = g_pendingRxMsValid.exchange(false, std::memory_order_acq_rel);
+							const uint64_t rxMs = haveRx ? g_pendingRxMs.load(std::memory_order_relaxed) : 0;
+							const uint64_t decDoneMs = SystemMsNow();
 							{
 								std::lock_guard<std::mutex> lk2(g_frameMtx);
 								g_sharedFrame.w = w;
 								g_sharedFrame.h = h;
 								g_sharedFrame.decodedIndex = decodedIndex;
 								g_sharedFrame.bgra = std::move(bgra);
+								g_sharedFrame.frameId = frameId;
+								g_sharedFrame.capMs = capMs;
+								g_sharedFrame.encMs = encMs;
+								g_sharedFrame.sendMs = sendMs;
+								g_sharedFrame.hasAgentTimes = haveSei;
+
+								g_sharedFrame.rxMs = rxMs;
+								g_sharedFrame.decDoneMs = decDoneMs;
+								g_sharedFrame.hasRxDecTimes = haveRx;
 								g_sharedFrame.decodeQueuedSteady = queued;
 								g_sharedFrame.hasDecodeQueuedSteady = true;
 								g_sharedFrame.ready = true;

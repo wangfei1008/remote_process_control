@@ -3,7 +3,6 @@
 #include "app/runtime_config.h"
 #include "capture/i_capture_source.h"
 #include "capture/process_ui_tile.h"
-#include "capture/window_visibility_diagnostics.h"
 #include "common/rpc_time.h"
 #include "common/window_ops.h"
 
@@ -17,93 +16,6 @@
 #include <iostream>
 
 namespace {
-
-const char* layout_name(ProcessUiCompositeLayout layout)
-{
-    switch (layout) {
-        case ProcessUiCompositeLayout::Horizontal: return "horizontal";
-        case ProcessUiCompositeLayout::Vertical: return "vertical";
-        case ProcessUiCompositeLayout::Grid: return "grid";
-        case ProcessUiCompositeLayout::Bbox:
-        default: return "bbox";
-    }
-}
-
-std::string truncate_for_log(const std::string& s, size_t max_chars)
-{
-    if (s.size() <= max_chars) return s;
-    return s.substr(0, max_chars) + "...";
-}
-
-void maybe_log_process_ui_capture(DWORD pid,
-                                  const char* backend_name,
-                                  const ProcessUiCaptureOptions& options,
-                                  const std::vector<window_ops::window_info>& surfaces,
-                                  const std::vector<ProcessUiWindowTile>& tiles,
-                                  const CaptureGrabOutcome& outcome)
-{
-    if (!runtime_config::get_bool("RPC_LOG_PROCESS_SURFACES", false)) return;
-
-    const int interval_ms =
-        (std::max)(100, runtime_config::get_int("RPC_LOG_PROCESS_SURFACES_INTERVAL_MS", 1000));
-    static auto s_last_log = std::chrono::steady_clock::time_point{};
-    const auto now_steady = std::chrono::steady_clock::now();
-    if (now_steady - s_last_log < std::chrono::milliseconds(interval_ms)) return;
-    s_last_log = now_steady;
-
-    int union_l = INT_MAX;
-    int union_t = INT_MAX;
-    int union_r = INT_MIN;
-    int union_b = INT_MIN;
-    for (const auto& s : surfaces) {
-        union_l = (std::min)(union_l, static_cast<int>(s.rect_screen.left));
-        union_t = (std::min)(union_t, static_cast<int>(s.rect_screen.top));
-        union_r = (std::max)(union_r, static_cast<int>(s.rect_screen.right));
-        union_b = (std::max)(union_b, static_cast<int>(s.rect_screen.bottom));
-    }
-
-    std::cout << "[proc_ui] pid=" << pid << " backend=" << (backend_name ? backend_name : "?")
-              << " layout=" << layout_name(options.composite_layout)
-              << " surfaces=" << surfaces.size() << std::endl;
-    std::cout << "[proc_ui] enum_union_rect LTRB=(" << union_l << "," << union_t << "," << union_r << "," << union_b
-              << ") size=" << (union_r - union_l) << "x" << (union_b - union_t) << std::endl;
-
-    for (size_t i = 0; i < surfaces.size(); ++i) {
-        const auto& s = surfaces[i];
-        const RECT& r = s.rect_screen;
-        std::cout << "[proc_ui]  z=" << s.z_order << " hwnd=0x" << static_cast<void*>(s.hwnd) << " \""
-                  << truncate_for_log(s.title, 72) << "\" class=\"" << truncate_for_log(s.class_name, 48)
-                  << "\" rect=(" << r.left << "," << r.top << "," << r.right << "," << r.bottom << ") size="
-                  << (r.right - r.left) << "x" << (r.bottom - r.top) << std::endl;
-
-        const WindowVisibilityDiagnosis vis = diagnose_window_visibility(s.hwnd);
-        std::cout << "[proc_ui]  vis z=" << s.z_order << " IsWindowVisible=" << (vis.is_visible_api ? 1 : 0)
-                  << " iconic=" << (vis.minimized ? 1 : 0) << " style=0x" << std::hex
-                  << static_cast<uintptr_t>(static_cast<ULONG_PTR>(vis.style)) << " exstyle=0x"
-                  << static_cast<uintptr_t>(static_cast<ULONG_PTR>(vis.ex_style)) << std::dec << " layered="
-                  << (vis.layered ? 1 : 0)
-                  << " lwa_ok=" << (vis.layered_attrs_valid ? 1 : 0) << " lwa_alpha=" << static_cast<int>(vis.layered_alpha)
-                  << " lwa_flags=0x" << std::hex << vis.layered_flags << std::dec << " cloak=0x" << std::hex
-                  << vis.cloaked << std::dec << " disp_aff=0x" << std::hex << vis.display_affinity << std::dec
-                  << " owner=" << (vis.has_owner ? 1 : 0) << " ex_transp=" << (vis.ex_transparent ? 1 : 0)
-                  << " toolwin=" << (vis.ex_tool_window ? 1 : 0) << " noact=" << (vis.ex_no_activate ? 1 : 0)
-                  << " client=" << vis.client_w << "x" << vis.client_h << std::endl;
-        std::cout << "[proc_ui]  vis z=" << s.z_order << " why=" << vis.reason_summary << std::endl;
-    }
-
-    if (tiles.size() == surfaces.size()) {
-        for (size_t i = 0; i < tiles.size(); ++i) {
-            const auto& t = tiles[i];
-            std::cout << "[proc_ui]  cap z=" << t.z_order << " origin=(" << t.origin_left << "," << t.origin_top
-                      << ") wh=" << t.w << "x" << t.h << std::endl;
-        }
-    }
-
-    std::cout << "[proc_ui] outcome ok=" << (outcome.ok ? 1 : 0) << " cap_rect=(" << outcome.cap_min_left << ","
-              << outcome.cap_min_top << ")-(" << (outcome.cap_min_left + outcome.width) << ","
-              << (outcome.cap_min_top + outcome.height) << ") wh=" << outcome.width << "x" << outcome.height
-              << std::endl;
-}
 
 void make_even(int& v)
 {
@@ -327,14 +239,6 @@ CaptureGrabOutcome compose(const std::vector<ProcessUiWindowTile>& tiles,
 
 } // namespace
 
-std::string ProcessUiCapture::to_lower_ascii(std::string value)
-{
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value;
-}
-
 ProcessUiCaptureOptions ProcessUiCapture::load_layout_options_from_config()
 {
     ProcessUiCaptureOptions o;
@@ -368,7 +272,6 @@ CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
     }
 
     outcome = compose(tiles, options.composite_layout, options.composite_padding_px, options.composite_grid_columns);
-    maybe_log_process_ui_capture(pid, capture.backend_name(), options, surfaces, tiles, outcome);
     outcome.used_hw_capture = capture.uses_hw_capture();
     if (!outcome.ok || outcome.frame.empty() || outcome.width <= 0 || outcome.height <= 0) {
         outcome.ok = false;

@@ -31,6 +31,19 @@ struct SharedVideoFrame {
 	int w = 0;
 	int h = 0;
 	uint64_t decodedIndex = 0;
+	uint64_t frameId = 0;
+
+	// Agent unix-ms timestamps embedded in H264 SEI for this specific displayed frame.
+	uint64_t capMs = 0;
+	uint64_t encMs = 0;
+	uint64_t sendMs = 0;
+	bool hasAgentTimes = false;
+
+	// Receiver-side absolute timestamps for pipeline segmenting.
+	uint64_t rxMs = 0;        // SystemMsNow() when onFrame callback begins
+	uint64_t decDoneMs = 0;  // SystemMsNow() when decode result is published into shared frame
+	bool hasRxDecTimes = false;
+
 	bool ready = false;
 	std::chrono::steady_clock::time_point decodeQueuedSteady{};
 	bool hasDecodeQueuedSteady = false;
@@ -40,20 +53,6 @@ struct LatencyState {
 	std::mutex mtx;
 
 	std::optional<double> thetaMs;
-	uint64_t lastFrameMarkSeq = 0;
-	uint64_t lastFrameMarkSrvMs = 0;
-	bool hasLastFrameMark = false;
-
-	std::unordered_map<uint64_t, uint64_t> srvMsBySeq;
-
-	void prune(uint64_t currentSeq) {
-		constexpr uint64_t keepBehind = 2500;
-		uint64_t minSeq = (currentSeq > keepBehind) ? (currentSeq - keepBehind) : 0;
-		for (auto it = srvMsBySeq.begin(); it != srvMsBySeq.end();) {
-			if (it->first < minSeq) it = srvMsBySeq.erase(it);
-			else ++it;
-		}
-	}
 };
 
 struct D3DResources {
@@ -90,6 +89,18 @@ extern int g_maxPresentFps;
 
 extern std::mutex g_frameMtx;
 extern SharedVideoFrame g_sharedFrame;
+
+// Per-frame SEI injected via H264 (agent timestamps).
+// onFrame extracts SEI and sets these before decode; publish() consumes them.
+extern std::atomic<bool> g_pendingSeiValid;
+extern std::atomic<uint64_t> g_pendingFrameId;
+extern std::atomic<uint64_t> g_pendingCapMs;
+extern std::atomic<uint64_t> g_pendingEncMs;
+extern std::atomic<uint64_t> g_pendingSendMs;
+
+// Receiver rxMs captured at onFrame callback entry; consumed by publish().
+extern std::atomic<bool> g_pendingRxMsValid;
+extern std::atomic<uint64_t> g_pendingRxMs;
 
 extern std::recursive_mutex g_dcMtx;
 extern std::shared_ptr<rtc::DataChannel> g_dataChannel;

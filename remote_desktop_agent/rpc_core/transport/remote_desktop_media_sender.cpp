@@ -4,8 +4,99 @@
 
 #include "nlohmann/json.hpp"
 
+#include <array>
+#include <cstddef>
 #include <chrono>
 #include <iostream>
+#include <vector>
+
+static bool LooksLikeAnnexB(const rtc::binary& b)
+{
+    if (b.size() >= 4) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(b.data());
+        if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) return true;
+    }
+    if (b.size() >= 3) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(b.data());
+        if (p[0] == 0 && p[1] == 0 && p[2] == 1) return true;
+    }
+    return false;
+}
+
+static inline std::byte B(uint8_t v) { return static_cast<std::byte>(v); }
+
+static void AppendRbspWithEmulationPrevention(rtc::binary& out, const uint8_t* rbsp, size_t n)
+{
+    int zeroCount = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t b = rbsp[i];
+        if (zeroCount >= 2 && b <= 0x03) {
+            out.push_back(B(0x03));
+            zeroCount = 0;
+        }
+        out.push_back(B(b));
+        if (b == 0x00) zeroCount++;
+        else zeroCount = 0;
+    }
+}
+
+static std::vector<uint8_t> BuildRpcLatencySeiRbsp(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+{
+    static constexpr std::array<uint8_t, 16> kUuid = {
+        0x52, 0x50, 0x43, 0x2D, 0x4C, 0x41, 0x54, 0x45,
+        0x4E, 0x43, 0x59, 0x2D, 0x53, 0x45, 0x49, 0x31
+    }; // "RPC-LATENCY-SEI1"
+
+    // SEI payload:
+    //   UUID(16) + version(1) + frameId(8 LE) + capMs(8 LE) + encMs(8 LE) + sendMs(8 LE)
+    std::vector<uint8_t> rbsp;
+    rbsp.reserve(2 + 2 + 16 + 1 + 8 * 4 + 1);
+
+    const uint32_t payloadType = 5;               // user_data_unregistered
+    const uint32_t payloadSize = 16 + 1 + 8 * 4;  // == 49
+    rbsp.push_back(static_cast<uint8_t>(payloadType));
+    rbsp.push_back(static_cast<uint8_t>(payloadSize));
+    rbsp.insert(rbsp.end(), kUuid.begin(), kUuid.end());
+    rbsp.push_back(1); // version
+    for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((frameId >> (8 * i)) & 0xFF));
+    for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((capMs >> (8 * i)) & 0xFF));
+    for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((encMs >> (8 * i)) & 0xFF));
+    for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((sendMs >> (8 * i)) & 0xFF));
+    rbsp.push_back(0x80); // rbsp_trailing_bits
+    return rbsp;
+}
+
+static rtc::binary BuildRpcLatencySeiNaluAnnexB(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+{
+    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs);
+    rtc::binary out;
+    out.reserve(4 + 1 + rbsp.size() + 8);
+    out.insert(out.end(), { B(0x00), B(0x00), B(0x00), B(0x01) }); // start code
+    out.push_back(B(0x06));                                       // nal_unit_type=6 (SEI)
+    AppendRbspWithEmulationPrevention(out, rbsp.data(), rbsp.size());
+    return out;
+}
+
+static rtc::binary BuildRpcLatencySeiNaluAvcc(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+{
+    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs);
+    rtc::binary out;
+    // AVCC: 4-byte big-endian length + NAL (header+ebsp)
+    // NAL header is 1 byte (0x06) + rbsp with emulation prevention.
+    rtc::binary nal;
+    nal.reserve(1 + rbsp.size() + 8);
+    nal.push_back(B(0x06));
+    AppendRbspWithEmulationPrevention(nal, rbsp.data(), rbsp.size());
+
+    const uint32_t len = static_cast<uint32_t>(nal.size());
+    out.reserve(4 + nal.size());
+    out.push_back(B(static_cast<uint8_t>((len >> 24) & 0xFF)));
+    out.push_back(B(static_cast<uint8_t>((len >> 16) & 0xFF)));
+    out.push_back(B(static_cast<uint8_t>((len >> 8) & 0xFF)));
+    out.push_back(B(static_cast<uint8_t>((len >> 0) & 0xFF)));
+    out.insert(out.end(), nal.begin(), nal.end());
+    return out;
+}
 
 remote_desktop_media_sender::remote_desktop_media_sender(uint64_t frame_mark_interval,
                                                          uint64_t capture_health_interval,
@@ -58,8 +149,31 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
     send_video_control_messages(clients, video_sample_time_us, video_sample, telemetry);
     const auto t_ctrl1 = std::chrono::steady_clock::now();
 
+    rtc::binary sampleToSend = video_sample;
+    if (!video_sample.empty()) {
+        const uint64_t frameId = m_video_frame_index;
+        const uint64_t sendMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+        uint64_t capMs = telemetry.last_capture_unix_ms;
+        uint64_t encMs = telemetry.last_encode_unix_ms ? telemetry.last_encode_unix_ms : telemetry.last_frame_unix_ms;
+        if (capMs == 0) capMs = telemetry.last_frame_unix_ms;
+        if (encMs == 0) encMs = telemetry.last_frame_unix_ms;
+        if (capMs == 0) capMs = sendMs;
+        if (encMs == 0) encMs = sendMs;
+
+        const bool isAnnexB = LooksLikeAnnexB(video_sample);
+        const rtc::binary sei = isAnnexB
+            ? BuildRpcLatencySeiNaluAnnexB(frameId, capMs, encMs, sendMs)
+            : BuildRpcLatencySeiNaluAvcc(frameId, capMs, encMs, sendMs);
+        sampleToSend = rtc::binary{};
+        sampleToSend.reserve(sei.size() + video_sample.size());
+        sampleToSend.insert(sampleToSend.end(), sei.begin(), sei.end());
+        sampleToSend.insert(sampleToSend.end(), video_sample.begin(), video_sample.end());
+    }
+
     // 2) RTP 视频帧
-    send_media_frames(true, video_sample, video_sample_time_us, clients);
+    send_media_frames(true, sampleToSend, video_sample_time_us, clients);
     const auto t_send1 = std::chrono::steady_clock::now();
 
     if (!video_sample.empty()) {
@@ -69,7 +183,7 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
             const auto dc_us = std::chrono::duration_cast<std::chrono::microseconds>(t_ctrl1 - t_ctrl0).count();
             const auto rtp_us = std::chrono::duration_cast<std::chrono::microseconds>(t_send1 - t_ctrl1).count();
             std::cout << "[latency][agent_send] dc_json_ctrl_us=" << dc_us << " rtp_send_us=" << rtp_us
-                      << " bytes=" << video_sample.size() << std::endl;
+                      << " bytes=" << video_sample.size() << " bytes_sent=" << sampleToSend.size() << std::endl;
         }
     }
 
@@ -93,8 +207,6 @@ void remote_desktop_media_sender::send_video_control_messages(
     const rtc::binary& video_sample,
     const remote_capture_telemetry& telemetry)
 {
-    m_video_frame_index++;
-
     // 分辨率变化：依赖 telemetry（阶段性先用 0/真实由后续 engine 填充）
     const int curW = telemetry.capture_width;
     const int curH = telemetry.capture_height;
@@ -124,28 +236,11 @@ void remote_desktop_media_sender::send_video_control_messages(
                   << " frame_unix_ms=" << telemetry.last_frame_unix_ms << std::endl;
     }
 
-    // frameMark / captureHealth：按间隔发送
-    if ((m_video_frame_index % m_frame_mark_interval) != 0) return;
+    // Only emit captureHealth when we have a real video frame.
+    if (video_sample.empty()) return;
 
-    uint64_t srv_wall = telemetry.last_frame_unix_ms != 0 ? telemetry.last_frame_unix_ms : 0;
-    if (srv_wall == 0) {
-        srv_wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-    }
-
-    const nlohmann::json mark = {
-        { "type", "frameMark" },
-        { "seq", m_video_frame_index },
-        { "srvMs", srv_wall },
-        { "capMs", telemetry.last_capture_ms },
-        { "encMs", telemetry.last_encode_ms },
-    };
-    const std::string payload = mark.dump();
-    for (const auto& client : clients) {
-        auto ch = client ? client->get_data_channel() : nullptr;
-        if (!ch) continue;
-        try { ch->send(payload); } catch (...) {}
-    }
+    // frameId used by per-frame SEI injection is based on this counter.
+    m_video_frame_index++;
 
     if ((m_video_frame_index % m_capture_health_interval) == 0) {
         const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(

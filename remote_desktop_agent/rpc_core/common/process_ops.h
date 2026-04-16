@@ -19,6 +19,7 @@ struct PROCESS_INFORMATION {
 #endif
 
 #include <string>
+#include "character_conversion.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 功能说明： Win32 进程操作封装（会话级注入 + 句柄 RAII + 进程信息查询）
@@ -162,6 +163,12 @@ public:
     // 转移后本对象仍保留 launch/capture pid 与 exe basename（用于后续按 pid 查询/终止）。
     void detach_launch_process_info(PROCESS_INFORMATION& out_process_info);
 
+    /// 终止并关闭已由 detach 交给调用方的 launch 句柄；若 capture_pid 与 launch 不同则按 PID 终止 capture。
+    void terminate_detached_launch(PROCESS_INFORMATION& process_info,
+                                   DWORD capture_pid,
+                                   DWORD launch_pid,
+                                   UINT exit_code = 0) const;
+
     // === 进程查询/工具（无策略）===
     scoped_handle open_process(DWORD pid, DWORD access = PROCESS_QUERY_LIMITED_INFORMATION) const;
     bool query_full_image_name(HANDLE process_handle, std::string& out_path) const;
@@ -181,7 +188,6 @@ public:
 
 private:
     static std::string basename_from_path(const std::string& path);
-    static std::string to_lower_ascii(std::string s);
 
 private:
     std::string m_exe_path;

@@ -15,6 +15,7 @@ struct RECT {
 };
 #endif
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ struct RECT {
 //- 负责 IsWindow/IsWindowVisible/GetWindowRect/GetClassName/GetWindowText
 //- 负责 GetWindowThreadProcessId/GetWindow(GW_OWNER)/GetWindowLongPtr(style/ex_style)
 //- 负责 DWM 扩展边框 rect（优先 extended frame bounds）
+//- 负责顶层窗口枚举入口（EnumWindows → enumerate_top_level_windows）
 //- 不包含窗口“主窗/最优窗”策略与评分（这些属于策略层）
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -76,6 +78,9 @@ public:
 
     // Visible top-level windows for PID (same rules as legacy capture_all_windows).
     std::vector<window_info> enumerate_visible_top_level(DWORD pid) const;
+
+    /// 枚举所有顶层窗口（EnumWindows）。visitor 返回 true 继续，false 提前结束。
+    void enumerate_top_level_windows(const std::function<bool(HWND hwnd)>& visitor) const;
 
     window_info snapshot(HWND hwnd) const;
 };

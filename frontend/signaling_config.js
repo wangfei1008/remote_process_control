@@ -10,7 +10,7 @@
     'use strict';
     global.__rpcFrontendConfig = {
         signalingBaseUrl: '',
-        signalingHost: '127.0.0.1',
+        signalingHost: '192.168.3.15',
         signalingPort: 9090,
     };
 })(typeof window !== 'undefined' ? window : this);

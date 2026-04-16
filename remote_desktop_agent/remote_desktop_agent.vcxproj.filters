@@ -93,9 +93,6 @@
     <ClCompile Include="rpc_core\capture\process_ui_capture.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\window_visibility_diagnostics.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
@@ -122,15 +119,6 @@
     </ClCompile>
     <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp">
       <Filter>rpc_core\encode</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\session\remote_process_session.cpp">
-      <Filter>rpc_core\session</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\session\window_selection_diagnostics.cpp">
-      <Filter>rpc_core\session</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\session\window_selection_utils.cpp">
-      <Filter>rpc_core\session</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\session\session_health_policy.cpp">
       <Filter>rpc_core\session</Filter>
@@ -161,6 +149,9 @@
     </ClCompile>
     <ClCompile Include="input\input_controller.cpp">
       <Filter>input</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\common\character_conversion.cpp">
+      <Filter>rpc_core\common</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -215,9 +206,6 @@
     <ClInclude Include="rpc_core\capture\process_ui_capture.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\window_visibility_diagnostics.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\capture\dxgi_process_ui_capture_backend.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
@@ -260,9 +248,6 @@
     <ClInclude Include="rpc_core\encode\video_encode_pipeline.h">
       <Filter>rpc_core\encode</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\session\remote_process_session.h">
-      <Filter>rpc_core\session</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\session\session_health_policy.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
@@ -273,12 +258,6 @@
       <Filter>rpc_core\session</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\session\remote_capture_telemetry.h">
-      <Filter>rpc_core\session</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\session\window_selection_diagnostics.h">
-      <Filter>rpc_core\session</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\session\window_selection_utils.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\source\silence_opus_generator.h">
@@ -304,6 +283,9 @@
     </ClInclude>
     <ClInclude Include="app\runtime_config.h">
       <Filter>app</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\common\character_conversion.h">
+      <Filter>rpc_core\common</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

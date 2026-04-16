@@ -12,6 +12,11 @@ struct remote_capture_telemetry {
     uint32_t last_encode_ms = 0;
     uint64_t last_frame_unix_ms = 0;
 
+    // Absolute unix-ms timestamps (epoch ms) for the current encoded frame.
+    // These are embedded into per-frame H264 SEI so receiver can segment delays.
+    uint64_t last_capture_unix_ms = 0;
+    uint64_t last_encode_unix_ms = 0;
+
     bool last_capture_used_hw = false;
     bool dxgi_disabled_for_session = false;
     int top_black_strip_streak = 0;

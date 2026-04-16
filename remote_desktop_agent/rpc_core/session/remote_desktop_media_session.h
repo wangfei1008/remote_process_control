@@ -35,7 +35,6 @@ public:
     HWND get_main_window() const;
 
 private:
-private:
     mutable std::mutex m_mutex;
 
     std::string m_exe_path;

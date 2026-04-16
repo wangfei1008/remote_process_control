@@ -2,6 +2,7 @@
 
 #include "capture/capture_grab_outcome.h"
 #include "common/window_ops.h"
+#include "common/character_conversion.h"
 
 #include <windows.h>
 
@@ -30,8 +31,6 @@ public:
     // per-window visibility/style/LWA/DWM cloaked/display affinity, and English heuristic line (why=).
 
     static ProcessUiCaptureOptions load_layout_options_from_config();
-
-    static std::string to_lower_ascii(std::string value);
 
     /// 枚举窗口 + 调用 ICaptureSource 采集瓦片 + 合成布局；不根据帧内容切换后端。
     static CaptureGrabOutcome grab_process_ui_rgb(DWORD pid,

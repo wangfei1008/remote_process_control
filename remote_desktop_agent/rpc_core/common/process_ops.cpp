@@ -3,11 +3,6 @@
 #if defined(_WIN32)
 #include <TlHelp32.h>
 
-#include <algorithm>
-#include <cctype>
-
-namespace {
-} // namespace
 
 /////////////////////////////////////////////////////////////////////////////
 /// @说明
@@ -32,13 +27,6 @@ std::string process_ops::basename_from_path(const std::string& path)
 {
     const auto pos = path.find_last_of("\\/");
     return (pos == std::string::npos) ? path : path.substr(pos + 1);
-}
-
-std::string process_ops::to_lower_ascii(std::string s)
-{
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -148,6 +136,25 @@ void process_ops::detach_launch_process_info(PROCESS_INFORMATION& out_process_in
     out_process_info = m_pi.get();
     // 仅清空句柄，避免析构/stop 误 CloseHandle；pid 等语义状态保留。
     m_pi.get() = PROCESS_INFORMATION{};
+}
+
+void process_ops::terminate_detached_launch(PROCESS_INFORMATION& process_info,
+                                            DWORD capture_pid,
+                                            DWORD launch_pid,
+                                            UINT exit_code) const
+{
+    if (process_info.hProcess) {
+        terminate_by_handle(process_info.hProcess, exit_code);
+        CloseHandle(process_info.hProcess);
+        process_info.hProcess = nullptr;
+    }
+    if (process_info.hThread) {
+        CloseHandle(process_info.hThread);
+        process_info.hThread = nullptr;
+    }
+    if (capture_pid != 0 && capture_pid != launch_pid) {
+        terminate_by_pid(capture_pid, exit_code);
+    }
 }
 
 process_ops::scoped_handle process_ops::open_process(DWORD pid, DWORD access) const
@@ -262,6 +269,14 @@ process_ops::~process_ops() {}
 bool process_ops::start(const std::string&, DWORD, bool) { return false; }
 void process_ops::stop(bool, bool, UINT) {}
 bool process_ops::running() const { return false; }
+void process_ops::detach_launch_process_info(PROCESS_INFORMATION& out_process_info)
+{
+    out_process_info = PROCESS_INFORMATION{};
+}
+void process_ops::terminate_detached_launch(PROCESS_INFORMATION& process_info, DWORD, DWORD, UINT) const
+{
+    process_info = PROCESS_INFORMATION{};
+}
 
 process_ops::scoped_handle process_ops::open_process(DWORD, DWORD) const { return scoped_handle{}; }
 bool process_ops::query_full_image_name(HANDLE, std::string& out_path) const
@@ -287,7 +302,6 @@ DWORD process_ops::parent_pid_toolhelp(DWORD) const { return 0; }
 bool process_ops::is_same_or_descendant(DWORD, DWORD, int) const { return false; }
 
 std::string process_ops::basename_from_path(const std::string& path) { return path; }
-std::string process_ops::to_lower_ascii(std::string s) { return s; }
 
 #endif
 
