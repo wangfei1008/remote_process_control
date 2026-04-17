@@ -16,6 +16,8 @@ struct remote_capture_telemetry {
     // These are embedded into per-frame H264 SEI so receiver can segment delays.
     uint64_t last_capture_unix_ms = 0;
     uint64_t last_encode_unix_ms = 0;
+    /// Unix epoch ms on agent: instant immediately before grab (capture) for this frame.
+    uint64_t last_prep_unix_ms = 0;
 
     bool last_capture_used_hw = false;
     bool dxgi_disabled_for_session = false;

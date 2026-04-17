@@ -19,6 +19,8 @@ SharedVideoFrame g_sharedFrame;
 std::atomic<bool> g_pendingSeiValid{false};
 std::atomic<uint64_t> g_pendingFrameId{0};
 std::atomic<uint64_t> g_pendingCapMs{0};
+std::atomic<uint64_t> g_pendingPrepMs{0};
+std::atomic<bool> g_pendingHasPrepMs{false};
 std::atomic<uint64_t> g_pendingEncMs{0};
 std::atomic<uint64_t> g_pendingSendMs{0};
 

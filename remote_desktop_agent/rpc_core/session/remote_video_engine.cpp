@@ -14,12 +14,97 @@
 #include "session/session_health_policy.h"
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <thread>
 #include <utility>
 
+#include <windows.h>
+
 namespace {
+
+static void format_local_time_ms(uint64_t unix_ms, char* out, size_t out_size)
+{
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+
+    const time_t sec = (time_t)(unix_ms / 1000);
+    const int ms = (int)(unix_ms % 1000);
+    tm tm_local{};
+    if (localtime_s(&tm_local, &sec) != 0) return;
+
+    // YYYYMMDD_HHMMSS_mmm
+    std::snprintf(
+        out, out_size,
+        "%04d%02d%02d_%02d%02d%02d_%03d",
+        tm_local.tm_year + 1900,
+        tm_local.tm_mon + 1,
+        tm_local.tm_mday,
+        tm_local.tm_hour,
+        tm_local.tm_min,
+        tm_local.tm_sec,
+        ms);
+}
+
+static bool dump_rgb24_as_topdown_bmp(const std::string& file_path, const uint8_t* rgb, int width, int height)
+{
+    if (!rgb || width <= 0 || height <= 0) return false;
+
+    const int row_stride = ((width * 3 + 3) & ~3);
+    const uint32_t pixel_data_size = static_cast<uint32_t>(row_stride) * static_cast<uint32_t>(height);
+
+    BITMAPFILEHEADER file_header{};
+    BITMAPINFOHEADER info_header{};
+    file_header.bfType = 0x4D42;
+    file_header.bfOffBits = static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
+    file_header.bfSize = file_header.bfOffBits + pixel_data_size;
+
+    info_header.biSize = sizeof(BITMAPINFOHEADER);
+    info_header.biWidth = width;
+    info_header.biHeight = -height;
+    info_header.biPlanes = 1;
+    info_header.biBitCount = 24;
+    info_header.biCompression = BI_RGB;
+    info_header.biSizeImage = pixel_data_size;
+
+    std::ofstream output_stream(file_path, std::ios::binary);
+    if (!output_stream) return false;
+
+    output_stream.write(reinterpret_cast<const char*>(&file_header), sizeof(file_header));
+    output_stream.write(reinterpret_cast<const char*>(&info_header), sizeof(info_header));
+
+    std::vector<uint8_t> row(static_cast<size_t>(row_stride), 0);
+    for (int y = 0; y < height; ++y) {
+        std::fill(row.begin(), row.end(), 0);
+        const size_t row_base = static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = row_base + static_cast<size_t>(x) * 3u;
+            const uint8_t r = rgb[idx + 0];
+            const uint8_t g = rgb[idx + 1];
+            const uint8_t b = rgb[idx + 2];
+            row[static_cast<size_t>(x) * 3u + 0] = b;
+            row[static_cast<size_t>(x) * 3u + 1] = g;
+            row[static_cast<size_t>(x) * 3u + 2] = r;
+        }
+        output_stream.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row_stride));
+    }
+    return output_stream.good();
+}
+
+static std::string ensure_agent_dump_dir()
+{
+    static std::string s_dir;
+    static bool s_ready = false;
+    if (s_ready) return s_dir;
+
+    char cwd[MAX_PATH] = {0};
+    GetCurrentDirectoryA(MAX_PATH, cwd);
+    s_dir = std::string(cwd) + "\\agent_dump_frames";
+    CreateDirectoryA(s_dir.c_str(), nullptr);
+    s_ready = true;
+    return s_dir;
+}
 
 BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o)
 {
@@ -345,6 +430,7 @@ void remote_video_engine::capture_loop()
         apply_launch_window_placement(m_main_window);//可能执行一次窗口摆放
 
         // Capture and compose.
+        const uint64_t prep_unix_ms = rpc_unix_epoch_ms();
         const auto t_cap_begin = std::chrono::steady_clock::now();
         CaptureGrabOutcome outcome = ProcessUiCapture::grab_process_ui_rgb(m_capture_pid, surfaces, m_ui_capture_options, *m_capture_source, now_unix_ms);
         const auto t_after_cap = std::chrono::steady_clock::now();
@@ -376,6 +462,7 @@ void remote_video_engine::capture_loop()
                 CapturedFrame cf;
                 cf.frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
                 cf.unix_ms = cap_done_unix_ms;
+                cf.prep_unix_ms = prep_unix_ms;
                 cf.t_cap_begin = t_cap_begin;
                 cf.t_cap_done = t_after_cap;
 				cf.grab_outcome = outcome;
@@ -449,6 +536,7 @@ void remote_video_engine::encode_loop()
             EncodedSample es;
             es.frame_id = cf.frame_id;
             es.cap_unix_ms = cf.unix_ms;
+            es.prep_unix_ms = cf.prep_unix_ms;
             es.unix_ms = enc.frame_unix_ms ? enc.frame_unix_ms : cf.unix_ms;
             es.capture_ms = enc.capture_ms;
             es.encode_ms = enc.encode_ms;
@@ -474,6 +562,7 @@ void remote_video_engine::encode_loop()
                 m_last_capture_ms = es.capture_ms;
                 m_last_encode_ms = es.encode_ms;
                 m_last_capture_unix_ms = es.cap_unix_ms;
+                m_last_prep_unix_ms = es.prep_unix_ms;
                 m_last_frame_unix_ms = es.unix_ms;
                 m_last_capture_w = es.w;
                 m_last_capture_h = es.h;
@@ -528,6 +617,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         out_telemetry.last_encode_ms = es.encode_ms;
         out_telemetry.last_capture_unix_ms = es.cap_unix_ms;
         out_telemetry.last_encode_unix_ms = es.unix_ms;
+        out_telemetry.last_prep_unix_ms = es.prep_unix_ms;
         out_telemetry.last_frame_unix_ms = es.unix_ms ? es.unix_ms : now_unix_ms;
         out_telemetry.capture_width = es.w;
         out_telemetry.capture_height = es.h;
@@ -572,6 +662,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         out_telemetry.last_encode_ms = m_last_encode_ms;
         out_telemetry.last_capture_unix_ms = m_last_capture_unix_ms;
         out_telemetry.last_encode_unix_ms = m_last_frame_unix_ms;
+        out_telemetry.last_prep_unix_ms = m_last_prep_unix_ms;
         out_telemetry.last_frame_unix_ms = m_last_frame_unix_ms ? m_last_frame_unix_ms : now_unix_ms;
         out_telemetry.capture_width = m_last_capture_w;
         out_telemetry.capture_height = m_last_capture_h;
@@ -600,6 +691,7 @@ void remote_video_engine::reset_for_session_start()
     m_last_capture_ms = 0;
     m_last_encode_ms = 0;
     m_last_capture_unix_ms = 0;
+    m_last_prep_unix_ms = 0;
     m_last_frame_unix_ms = 0;
     {
         std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);

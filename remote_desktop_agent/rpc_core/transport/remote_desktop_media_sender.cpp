@@ -40,7 +40,7 @@ static void AppendRbspWithEmulationPrevention(rtc::binary& out, const uint8_t* r
     }
 }
 
-static std::vector<uint8_t> BuildRpcLatencySeiRbsp(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+static std::vector<uint8_t> BuildRpcLatencySeiRbsp(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs, uint64_t prepMs)
 {
     static constexpr std::array<uint8_t, 16> kUuid = {
         0x52, 0x50, 0x43, 0x2D, 0x4C, 0x41, 0x54, 0x45,
@@ -48,27 +48,28 @@ static std::vector<uint8_t> BuildRpcLatencySeiRbsp(uint64_t frameId, uint64_t ca
     }; // "RPC-LATENCY-SEI1"
 
     // SEI payload:
-    //   UUID(16) + version(1) + frameId(8 LE) + capMs(8 LE) + encMs(8 LE) + sendMs(8 LE)
+    //   UUID(16) + version(1) + frameId(8 LE) + capMs(8 LE) + encMs(8 LE) + sendMs(8 LE) + prepMs(8 LE)  [v2]
     std::vector<uint8_t> rbsp;
-    rbsp.reserve(2 + 2 + 16 + 1 + 8 * 4 + 1);
+    rbsp.reserve(2 + 2 + 16 + 1 + 8 * 5 + 1);
 
     const uint32_t payloadType = 5;               // user_data_unregistered
-    const uint32_t payloadSize = 16 + 1 + 8 * 4;  // == 49
+    const uint32_t payloadSize = 16 + 1 + 8 * 5;  // version 2 == 57
     rbsp.push_back(static_cast<uint8_t>(payloadType));
     rbsp.push_back(static_cast<uint8_t>(payloadSize));
     rbsp.insert(rbsp.end(), kUuid.begin(), kUuid.end());
-    rbsp.push_back(1); // version
+    rbsp.push_back(2); // version: prepMs added
     for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((frameId >> (8 * i)) & 0xFF));
     for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((capMs >> (8 * i)) & 0xFF));
     for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((encMs >> (8 * i)) & 0xFF));
     for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((sendMs >> (8 * i)) & 0xFF));
+    for (int i = 0; i < 8; ++i) rbsp.push_back(static_cast<uint8_t>((prepMs >> (8 * i)) & 0xFF));
     rbsp.push_back(0x80); // rbsp_trailing_bits
     return rbsp;
 }
 
-static rtc::binary BuildRpcLatencySeiNaluAnnexB(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+static rtc::binary BuildRpcLatencySeiNaluAnnexB(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs, uint64_t prepMs)
 {
-    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs);
+    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs, prepMs);
     rtc::binary out;
     out.reserve(4 + 1 + rbsp.size() + 8);
     out.insert(out.end(), { B(0x00), B(0x00), B(0x00), B(0x01) }); // start code
@@ -77,9 +78,9 @@ static rtc::binary BuildRpcLatencySeiNaluAnnexB(uint64_t frameId, uint64_t capMs
     return out;
 }
 
-static rtc::binary BuildRpcLatencySeiNaluAvcc(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs)
+static rtc::binary BuildRpcLatencySeiNaluAvcc(uint64_t frameId, uint64_t capMs, uint64_t encMs, uint64_t sendMs, uint64_t prepMs)
 {
-    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs);
+    const std::vector<uint8_t> rbsp = BuildRpcLatencySeiRbsp(frameId, capMs, encMs, sendMs, prepMs);
     rtc::binary out;
     // AVCC: 4-byte big-endian length + NAL (header+ebsp)
     // NAL header is 1 byte (0x06) + rbsp with emulation prevention.
@@ -161,11 +162,13 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
         if (encMs == 0) encMs = telemetry.last_frame_unix_ms;
         if (capMs == 0) capMs = sendMs;
         if (encMs == 0) encMs = sendMs;
+        uint64_t prepMs = telemetry.last_prep_unix_ms;
+        if (prepMs == 0) prepMs = capMs;
 
         const bool isAnnexB = LooksLikeAnnexB(video_sample);
         const rtc::binary sei = isAnnexB
-            ? BuildRpcLatencySeiNaluAnnexB(frameId, capMs, encMs, sendMs)
-            : BuildRpcLatencySeiNaluAvcc(frameId, capMs, encMs, sendMs);
+            ? BuildRpcLatencySeiNaluAnnexB(frameId, capMs, encMs, sendMs, prepMs)
+            : BuildRpcLatencySeiNaluAvcc(frameId, capMs, encMs, sendMs, prepMs);
         sampleToSend = rtc::binary{};
         sampleToSend.reserve(sei.size() + video_sample.size());
         sampleToSend.insert(sampleToSend.end(), sei.begin(), sei.end());

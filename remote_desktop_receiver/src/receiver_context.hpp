@@ -37,6 +37,9 @@ struct SharedVideoFrame {
 	uint64_t capMs = 0;
 	uint64_t encMs = 0;
 	uint64_t sendMs = 0;
+	/// Agent: unix ms immediately before capture (grab) for this frame; SEI v2+ only.
+	uint64_t prepMs = 0;
+	bool hasPrepMs = false;
 	bool hasAgentTimes = false;
 
 	// Receiver-side absolute timestamps for pipeline segmenting.
@@ -97,6 +100,8 @@ extern std::atomic<uint64_t> g_pendingFrameId;
 extern std::atomic<uint64_t> g_pendingCapMs;
 extern std::atomic<uint64_t> g_pendingEncMs;
 extern std::atomic<uint64_t> g_pendingSendMs;
+extern std::atomic<uint64_t> g_pendingPrepMs;
+extern std::atomic<bool> g_pendingHasPrepMs;
 
 // Receiver rxMs captured at onFrame callback entry; consumed by publish().
 extern std::atomic<bool> g_pendingRxMsValid;
