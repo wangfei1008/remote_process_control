@@ -86,9 +86,7 @@ bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h, 
 VideoEncodeResult VideoEncodePipeline::encode_frame(const std::vector<uint8_t>& frame,
                                                     int captured_w,
                                                     int captured_h,
-                                                    bool applied_layout,
-                                                    std::chrono::steady_clock::time_point t_cap_begin,
-                                                    std::chrono::steady_clock::time_point t_after_cap)
+                                                    bool applied_layout)
 {
     VideoEncodeResult result;
     if (!m_av_codec_ctx || frame.empty() || captured_w <= 0 || captured_h <= 0) return result;
@@ -126,11 +124,6 @@ VideoEncodeResult VideoEncodePipeline::encode_frame(const std::vector<uint8_t>& 
         patched.insert(patched.end(), result.sample.begin(), result.sample.end());
         result.sample.swap(patched);
     }
-
-    result.capture_ms = static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(t_after_cap - t_cap_begin).count());
-    result.encode_ms = static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(t_enc_end - t_enc_begin).count());
     result.frame_unix_ms = rpc_unix_epoch_ms();
     result.encode_ok = true;
     m_pending_force_keyframe.store(false);

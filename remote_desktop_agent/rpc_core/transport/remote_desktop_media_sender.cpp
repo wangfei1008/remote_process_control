@@ -234,9 +234,7 @@ void remote_desktop_media_sender::send_video_control_messages(
     if (now - m_last_log > std::chrono::seconds(1)) {
         m_last_log = now;
         std::cout << "[video] sampleTime(us)=" << video_sample_time_us << " size=" << video_sample.size() << std::endl;
-        std::cout << "[latency][sender] capture_ms=" << telemetry.last_capture_ms
-                  << " encode_ms=" << telemetry.last_encode_ms
-                  << " frame_unix_ms=" << telemetry.last_frame_unix_ms << std::endl;
+        std::cout << "[latency][sender] frame_unix_ms=" << telemetry.last_frame_unix_ms << std::endl;
     }
 
     // Only emit captureHealth when we have a real video frame.
@@ -246,21 +244,12 @@ void remote_desktop_media_sender::send_video_control_messages(
     m_video_frame_index++;
 
     if ((m_video_frame_index % m_capture_health_interval) == 0) {
-        const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-        const bool forceSwActive = (telemetry.force_software_capture_until_unix_ms != 0 &&
-                                      nowMs < telemetry.force_software_capture_until_unix_ms);
-
         const nlohmann::json health = {
             { "type", "captureHealth" },
             { "backend", telemetry.last_capture_used_hw ? "dxgi" : "gdi" },
             { "dxgiDisabledForSession", telemetry.dxgi_disabled_for_session },
             { "topBlackStripStreak", telemetry.top_black_strip_streak },
             { "dxgiInstabilityScore", telemetry.dxgi_instability_score },
-            { "forceSoftwareActive", forceSwActive },
-            { "forceSoftwareRemainMs", forceSwActive ? (telemetry.force_software_capture_until_unix_ms - nowMs) : 0 },
-            { "capMs", telemetry.last_capture_ms },
-            { "encMs", telemetry.last_encode_ms },
         };
 
         const std::string healthPayload = health.dump();

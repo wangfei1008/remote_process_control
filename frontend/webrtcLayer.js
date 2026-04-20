@@ -99,18 +99,13 @@
                     const dxgiDisabled = !!j.dxgiDisabledForSession;
                     const stripStreak = Number(j.topBlackStripStreak || 0);
                     const dxgiScore = Number(j.dxgiInstabilityScore || 0);
-                    const forceSw = !!j.forceSoftwareActive;
-                    const forceSwRemain = Number(j.forceSoftwareRemainMs || 0);
-                    const capMs = Number(j.capMs || 0);
-                    const encMs = Number(j.encMs || 0);
                     const summary = 'backend=' + backend
                         + ' score=' + dxgiScore
                         + (dxgiDisabled ? ' (dxgi_disabled)' : '')
                         + ' strip=' + stripStreak
-                        + (forceSw ? (' sw_fallback=' + Math.max(0, Math.round(forceSwRemain)) + 'ms') : '')
-                        + ' cap/enc=' + capMs + '/' + encMs + 'ms';
+                        ;
                     state.lastCaptureHealthSummary = summary;
-                    if (forceSw || dxgiDisabled || stripStreak > 0) {
+                    if (dxgiDisabled || stripStreak > 0) {
                         console.warn('[capture] health ' + summary);
                     }
                     return true;

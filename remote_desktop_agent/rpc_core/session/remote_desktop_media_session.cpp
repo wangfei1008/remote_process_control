@@ -131,8 +131,6 @@ void remote_desktop_media_session::start_media_session()
                         s_last_nonempty_log = t_after_send;
                         std::cout << "[latency][agent_pipe] tick=" << s_video_loop_tick
                                   << " produce_us=" << produce_us << " send_path_us=" << send_us
-                                  << " cap_ms=" << telemetry.last_capture_ms
-                                  << " enc_ms=" << telemetry.last_encode_ms
                                   << " bytes=" << video_sample.size() << std::endl;
                     }
                 } else if (s_video_loop_tick <= 12) {

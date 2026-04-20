@@ -62,8 +62,6 @@ private:
         uint64_t unix_ms = 0;
         // Unix epoch ms immediately before this frame's grab (scheduling / pre-capture).
         uint64_t prep_unix_ms = 0;
-        std::chrono::steady_clock::time_point t_cap_begin{};
-        std::chrono::steady_clock::time_point t_cap_done{};
 		CaptureGrabOutcome grab_outcome;
     };
 
@@ -76,15 +74,15 @@ private:
     };
 
     struct EncodedSample {
+        //帧序号
         uint64_t frame_id = 0;
-        // Encode-complete absolute unix ms (epoch ms).
+        //编码完成时刻的绝对时间戳
         uint64_t unix_ms = 0;
-        // Capture-complete absolute unix ms (epoch ms).
+        //采集完成时刻的绝对时间戳
         uint64_t cap_unix_ms = 0;
-        uint64_t prep_unix_ms = 0;
-        uint32_t capture_ms = 0;
-        uint32_t encode_ms = 0;
+        //编码后的码流数据
         rtc::binary sample;
+        //这帧采集是否走硬件路径(DXGI)，供遥测使用
         bool used_hw_capture = false;
         int w = 0;
         int h = 0;
@@ -126,8 +124,6 @@ private:
 
     // Shared snapshot for telemetry fields filled by encode thread.
     std::mutex m_last_enc_mtx;
-    uint32_t m_last_capture_ms = 0;
-    uint32_t m_last_encode_ms = 0;
     uint64_t m_last_capture_unix_ms = 0;
     uint64_t m_last_prep_unix_ms = 0;
     uint64_t m_last_frame_unix_ms = 0;

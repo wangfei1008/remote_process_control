@@ -15,8 +15,6 @@ struct VideoEncodeResult {
     bool encode_ok = false;
     bool invalid_payload = false;
     rtc::binary sample;
-    uint32_t capture_ms = 0;
-    uint32_t encode_ms = 0;
     uint64_t frame_unix_ms = 0;
 };
 
@@ -37,9 +35,7 @@ public:
     VideoEncodeResult encode_frame(const std::vector<uint8_t>& frame,
                                    int captured_w,
                                    int captured_h,
-                                   bool applied_layout,
-                                   std::chrono::steady_clock::time_point t_cap_begin,
-                                   std::chrono::steady_clock::time_point t_enc_begin_ref);
+                                   bool applied_layout);
 
 private:
     void destroy_encoder();

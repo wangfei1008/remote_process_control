@@ -431,9 +431,7 @@ void remote_video_engine::capture_loop()
 
         // Capture and compose.
         const uint64_t prep_unix_ms = rpc_unix_epoch_ms();
-        const auto t_cap_begin = std::chrono::steady_clock::now();
         CaptureGrabOutcome outcome = ProcessUiCapture::grab_process_ui_rgb(m_capture_pid, surfaces, m_ui_capture_options, *m_capture_source, now_unix_ms);
-        const auto t_after_cap = std::chrono::steady_clock::now();
 
         m_last_capture_used_hw = outcome.used_hw_capture;
 
@@ -463,8 +461,6 @@ void remote_video_engine::capture_loop()
                 cf.frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
                 cf.unix_ms = cap_done_unix_ms;
                 cf.prep_unix_ms = prep_unix_ms;
-                cf.t_cap_begin = t_cap_begin;
-                cf.t_cap_done = t_after_cap;
 				cf.grab_outcome = outcome;
 				cf.grab_outcome.frame = std::move(outcome.frame); // ensure frame data moves with the outcome for potential diagnostics.
 
@@ -530,7 +526,7 @@ void remote_video_engine::encode_loop()
         if (!layout_ok) continue;
 
         //5.编码
-        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(cf.grab_outcome.frame, cf.grab_outcome.width, cf.grab_outcome.height, applied_layout, cf.t_cap_begin, cf.t_cap_done);
+        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(cf.grab_outcome.frame, cf.grab_outcome.width, cf.grab_outcome.height, applied_layout);
 
         if (enc.encode_ok && !enc.sample.empty() && !enc.invalid_payload) {
             EncodedSample es;
@@ -538,8 +534,6 @@ void remote_video_engine::encode_loop()
             es.cap_unix_ms = cf.unix_ms;
             es.prep_unix_ms = cf.prep_unix_ms;
             es.unix_ms = enc.frame_unix_ms ? enc.frame_unix_ms : cf.unix_ms;
-            es.capture_ms = enc.capture_ms;
-            es.encode_ms = enc.encode_ms;
             es.sample = std::move(enc.sample);
             es.used_hw_capture = cf.grab_outcome.used_hw_capture;
             es.w = target_w;
@@ -559,8 +553,6 @@ void remote_video_engine::encode_loop()
             {
                 //更新编码遥测快照
                 std::lock_guard<std::mutex> lk(m_last_enc_mtx);
-                m_last_capture_ms = es.capture_ms;
-                m_last_encode_ms = es.encode_ms;
                 m_last_capture_unix_ms = es.cap_unix_ms;
                 m_last_prep_unix_ms = es.prep_unix_ms;
                 m_last_frame_unix_ms = es.unix_ms;
@@ -613,8 +605,6 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     if (have && !es.sample.empty()) {
         out_sample = std::move(es.sample);
         //把编码线程产出的遥测写到
-        out_telemetry.last_capture_ms = es.capture_ms;
-        out_telemetry.last_encode_ms = es.encode_ms;
         out_telemetry.last_capture_unix_ms = es.cap_unix_ms;
         out_telemetry.last_encode_unix_ms = es.unix_ms;
         out_telemetry.last_prep_unix_ms = es.prep_unix_ms;
@@ -622,34 +612,6 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
         out_telemetry.capture_width = es.w;
         out_telemetry.capture_height = es.h;
 
-        //每秒一次打印队列统计日志
-        static auto s_last_diag = std::chrono::steady_clock::now();
-        const auto now = std::chrono::steady_clock::now();
-        if (now - s_last_diag >= std::chrono::seconds(1)) {
-            s_last_diag = now;
-            uint64_t dropped_overwrite = 0;
-            uint64_t dropped_overflow = 0;
-            uint64_t stored = 0;
-            uint64_t pushed = 0;
-            size_t sendq_cap = 0;
-            {
-                std::lock_guard<std::mutex> lk(m_latest_frame.mtx);
-                dropped_overwrite = m_latest_frame.dropped_by_overwrite;
-                stored = m_latest_frame.stored_frames;
-            }
-            {
-                std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
-                dropped_overflow = m_latest_encoded.dropped_by_overflow;
-                pushed = m_latest_encoded.pushed;
-                sendq_cap = m_latest_encoded.capacity;
-            }
-            std::cout << "[latency][agent_q] stored=" << stored
-                      << " pushed=" << pushed
-                      << " drop_overwrite=" << dropped_overwrite
-                      << " drop_sendq=" << dropped_overflow
-                      << " sendq_cap=" << sendq_cap
-                      << std::endl;
-        }
         return;
     }
 
@@ -658,8 +620,6 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     {
         //加锁 m_last_enc_mtx，用上一次成功编码的快照填 out_telemetry：
         std::lock_guard<std::mutex> lk(m_last_enc_mtx);
-        out_telemetry.last_capture_ms = m_last_capture_ms;
-        out_telemetry.last_encode_ms = m_last_encode_ms;
         out_telemetry.last_capture_unix_ms = m_last_capture_unix_ms;
         out_telemetry.last_encode_unix_ms = m_last_frame_unix_ms;
         out_telemetry.last_prep_unix_ms = m_last_prep_unix_ms;
@@ -688,8 +648,6 @@ void remote_video_engine::reset_for_session_start()
     m_last_launch_placement_hwnd = nullptr;
 
     m_had_successful_video.store(false, std::memory_order_relaxed);
-    m_last_capture_ms = 0;
-    m_last_encode_ms = 0;
     m_last_capture_unix_ms = 0;
     m_last_prep_unix_ms = 0;
     m_last_frame_unix_ms = 0;
@@ -769,5 +727,4 @@ void remote_video_engine::fill_capture_backend_telemetry(remote_capture_telemetr
     out_telemetry.dxgi_disabled_for_session = false;
     out_telemetry.top_black_strip_streak = 0;
     out_telemetry.dxgi_instability_score = 0;
-    out_telemetry.force_software_capture_until_unix_ms = 0;
 }
