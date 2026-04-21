@@ -242,7 +242,7 @@ void remote_video_engine::exit_watch_loop()
                 DWORD  window_owner_pid = wops.get_window_pid(m_main_window);
 
                 if (window_owner_pid != 0) {
-                    auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
+                    auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);//主窗口所属 PID（window_owner_pid）为主判断
                     if (!h) {
                         notify_remote_exit_if_needed("main_window_owner_open_failed");
                         break;
@@ -597,7 +597,7 @@ void remote_video_engine::try_recover_main_window()
         m_launch_pid,
         m_capture_pid,
         exe_base_name,
-        m_allow_pid_rebind_by_exename,
+        true,
         m_had_successful_video.load(std::memory_order_relaxed),
         m_pid_rebind_deadline_unix_ms);
 

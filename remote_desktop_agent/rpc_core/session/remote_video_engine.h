@@ -85,7 +85,6 @@ private:
 
 	std::unique_ptr<process_ops> m_process_ops;
 
-    bool m_allow_pid_rebind_by_exename = true;
     uint64_t m_pid_rebind_deadline_unix_ms = 0;
 
     /// 引擎构造时解析，整引擎生命周期内不变；AUTO 为 DXGI > GDI。
