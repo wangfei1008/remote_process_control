@@ -1,6 +1,6 @@
 #pragma once
 
-#include "capture/capture_grab_outcome.h"
+#include "common/remote_video_types.h"
 #include "common/window_ops.h"
 #include "common/character_conversion.h"
 

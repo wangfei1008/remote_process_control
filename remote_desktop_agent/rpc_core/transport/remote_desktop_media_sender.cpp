@@ -247,9 +247,6 @@ void remote_desktop_media_sender::send_video_control_messages(
         const nlohmann::json health = {
             { "type", "captureHealth" },
             { "backend", telemetry.last_capture_used_hw ? "dxgi" : "gdi" },
-            { "dxgiDisabledForSession", telemetry.dxgi_disabled_for_session },
-            { "topBlackStripStreak", telemetry.top_black_strip_streak },
-            { "dxgiInstabilityScore", telemetry.dxgi_instability_score },
         };
 
         const std::string healthPayload = health.dump();

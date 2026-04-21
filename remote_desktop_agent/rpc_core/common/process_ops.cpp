@@ -4,6 +4,14 @@
 #include <TlHelp32.h>
 
 
+process_ops::process_ops(const std::string& exe_path, DWORD creation_flags, bool show_maximized)
+	: m_exe_path(exe_path)
+	, m_creation_flags(creation_flags)
+	, m_show_maximized(show_maximized)
+{
+    m_target_exe_base_name_lower = to_lower_ascii(basename_from_path(exe_path));
+}
+
 /////////////////////////////////////////////////////////////////////////////
 /// @说明
 ///          析构：按会话语义自动 stop（默认终止进程并释放句柄）
@@ -42,23 +50,19 @@ std::string process_ops::basename_from_path(const std::string& path)
 ///
 /// @时间    2026/4/15
 /////////////////////////////////////////////////////////////////////////////
-bool process_ops::start(const std::string& exe_path, DWORD creation_flags, bool show_maximized)
+bool process_ops::start()
 {
     stop(false, true, 0);
 
-    m_exe_path = exe_path;
-    m_target_exe_base_name_lower = to_lower_ascii(basename_from_path(exe_path));
-
     STARTUPINFOA si{};
     si.cb = sizeof(si);
-    if (show_maximized) {
+    if (m_show_maximized) {
         si.dwFlags = STARTF_USESHOWWINDOW;
         si.wShowWindow = SW_SHOWMAXIMIZED;
     }
 
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessA(exe_path.c_str(), nullptr, nullptr, nullptr, FALSE, creation_flags, nullptr, nullptr, &si,
-                        &pi)) {
+    if (!CreateProcessA(m_exe_path.c_str(), nullptr, nullptr, nullptr, FALSE, m_creation_flags, nullptr, nullptr, &si, &pi)) {
         m_launch_pid = 0;
         m_capture_pid = 0;
         return false;

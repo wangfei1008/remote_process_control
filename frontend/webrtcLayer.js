@@ -96,18 +96,8 @@
                 }
                 if (j.type === 'captureHealth') {
                     const backend = String(j.backend || 'unknown');
-                    const dxgiDisabled = !!j.dxgiDisabledForSession;
-                    const stripStreak = Number(j.topBlackStripStreak || 0);
-                    const dxgiScore = Number(j.dxgiInstabilityScore || 0);
-                    const summary = 'backend=' + backend
-                        + ' score=' + dxgiScore
-                        + (dxgiDisabled ? ' (dxgi_disabled)' : '')
-                        + ' strip=' + stripStreak
-                        ;
+                    const summary = 'backend=' + backend;
                     state.lastCaptureHealthSummary = summary;
-                    if (dxgiDisabled || stripStreak > 0) {
-                        console.warn('[capture] health ' + summary);
-                    }
                     return true;
                 }
             } catch (_) {

@@ -1,7 +1,6 @@
 #include "session/remote_video_engine.h"
 
 #include "app/runtime_config.h"
-#include "capture/capture_init_context.h"
 #include "capture/capture_source_factory.h"
 #include "capture/frame_sanitizer.h"
 #include "capture/process_ui_capture.h"
@@ -23,88 +22,6 @@
 #include <windows.h>
 
 namespace {
-
-static void format_local_time_ms(uint64_t unix_ms, char* out, size_t out_size)
-{
-    if (!out || out_size == 0) return;
-    out[0] = '\0';
-
-    const time_t sec = (time_t)(unix_ms / 1000);
-    const int ms = (int)(unix_ms % 1000);
-    tm tm_local{};
-    if (localtime_s(&tm_local, &sec) != 0) return;
-
-    // YYYYMMDD_HHMMSS_mmm
-    std::snprintf(
-        out, out_size,
-        "%04d%02d%02d_%02d%02d%02d_%03d",
-        tm_local.tm_year + 1900,
-        tm_local.tm_mon + 1,
-        tm_local.tm_mday,
-        tm_local.tm_hour,
-        tm_local.tm_min,
-        tm_local.tm_sec,
-        ms);
-}
-
-static bool dump_rgb24_as_topdown_bmp(const std::string& file_path, const uint8_t* rgb, int width, int height)
-{
-    if (!rgb || width <= 0 || height <= 0) return false;
-
-    const int row_stride = ((width * 3 + 3) & ~3);
-    const uint32_t pixel_data_size = static_cast<uint32_t>(row_stride) * static_cast<uint32_t>(height);
-
-    BITMAPFILEHEADER file_header{};
-    BITMAPINFOHEADER info_header{};
-    file_header.bfType = 0x4D42;
-    file_header.bfOffBits = static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
-    file_header.bfSize = file_header.bfOffBits + pixel_data_size;
-
-    info_header.biSize = sizeof(BITMAPINFOHEADER);
-    info_header.biWidth = width;
-    info_header.biHeight = -height;
-    info_header.biPlanes = 1;
-    info_header.biBitCount = 24;
-    info_header.biCompression = BI_RGB;
-    info_header.biSizeImage = pixel_data_size;
-
-    std::ofstream output_stream(file_path, std::ios::binary);
-    if (!output_stream) return false;
-
-    output_stream.write(reinterpret_cast<const char*>(&file_header), sizeof(file_header));
-    output_stream.write(reinterpret_cast<const char*>(&info_header), sizeof(info_header));
-
-    std::vector<uint8_t> row(static_cast<size_t>(row_stride), 0);
-    for (int y = 0; y < height; ++y) {
-        std::fill(row.begin(), row.end(), 0);
-        const size_t row_base = static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
-        for (int x = 0; x < width; ++x) {
-            const size_t idx = row_base + static_cast<size_t>(x) * 3u;
-            const uint8_t r = rgb[idx + 0];
-            const uint8_t g = rgb[idx + 1];
-            const uint8_t b = rgb[idx + 2];
-            row[static_cast<size_t>(x) * 3u + 0] = b;
-            row[static_cast<size_t>(x) * 3u + 1] = g;
-            row[static_cast<size_t>(x) * 3u + 2] = r;
-        }
-        output_stream.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row_stride));
-    }
-    return output_stream.good();
-}
-
-static std::string ensure_agent_dump_dir()
-{
-    static std::string s_dir;
-    static bool s_ready = false;
-    if (s_ready) return s_dir;
-
-    char cwd[MAX_PATH] = {0};
-    GetCurrentDirectoryA(MAX_PATH, cwd);
-    s_dir = std::string(cwd) + "\\agent_dump_frames";
-    CreateDirectoryA(s_dir.c_str(), nullptr);
-    s_ready = true;
-    return s_dir;
-}
 
 BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o)
 {
@@ -138,12 +55,11 @@ HWND primary_hwnd_from_surfaces(const std::vector<window_ops::window_info>& surf
 
 } // namespace
 
-remote_video_engine::remote_video_engine(std::string exe_path, std::function<void()> on_remote_process_exit, remote_video_engine::window_missing_fn on_window_missing)
-    : m_exe_path(std::move(exe_path))
-    , m_on_remote_process_exit(std::move(on_remote_process_exit))
+remote_video_engine::remote_video_engine(const std::string& exe_path, std::function<void()> on_remote_process_exit, remote_video_engine::window_missing_fn on_window_missing)
+    : m_on_remote_process_exit(std::move(on_remote_process_exit))
     , m_on_window_missing(std::move(on_window_missing))
 {
-    m_process_ops = std::make_unique<process_ops>();
+    m_process_ops = std::make_unique<process_ops>(exe_path);
 
     m_video_encode_pipeline = std::make_unique<VideoEncodePipeline>();
     m_bmp_dump.configure_from_config();
@@ -169,8 +85,7 @@ remote_video_engine::remote_video_engine(std::string exe_path, std::function<voi
         m_steady_frame_hold = (m_capture_kind == ProcessCaptureKind::Gdi);
         m_capture_source = create_capture_source(m_capture_kind);
         if (m_capture_source) {
-            CaptureInitContext init_ctx{};
-            m_capture_source->init(init_ctx);
+            m_capture_source->init();
         }
     }
 
@@ -219,10 +134,10 @@ remote_video_engine::~remote_video_engine()
 }
 
 void remote_video_engine::start()
-{
-    if (m_running.exchange(true)) return;
-
+{    
     if (!m_process_ops) return;
+
+    if (m_running.exchange(true)) return;
 
     if (m_capture_explicit_backend_error) {
         const std::string req = to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", ""));
@@ -321,43 +236,42 @@ void remote_video_engine::notify_remote_exit_if_needed(const char* why)
 void remote_video_engine::exit_watch_loop()
 {
     while (m_running.load(std::memory_order_relaxed)) {
-        DWORD window_owner_pid = 0;
-        HWND mw = m_main_window;
-        if (mw) {
+        if (m_main_window) {
             window_ops wops;
-            if (wops.is_valid(mw)) {
-                window_owner_pid = wops.get_window_pid(mw);
-            }
-        }
+            if (wops.is_valid(m_main_window)) {
+                DWORD  window_owner_pid = wops.get_window_pid(m_main_window);
 
-        if (window_owner_pid != 0) {
-            auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
-            if (!h) {
-                notify_remote_exit_if_needed("main_window_owner_open_failed");
-                break;
-            }
-            DWORD exit_code = 0;
-            if (!m_process_ops->get_exit_code(h.get(), exit_code)) {
-                notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
-                break;
-            }
-            if (exit_code != STILL_ACTIVE) {
-                notify_remote_exit_if_needed("main_window_owner_exited");
-                break;
-            }
-        } else if (m_pi.hProcess) {
-            DWORD exit_code = 0;
-            const bool ok = m_process_ops->get_exit_code(m_pi.hProcess, exit_code);
-            if (ok && exit_code != STILL_ACTIVE) {
-                const DWORD cap = m_capture_pid;
-                const DWORD launch = m_launch_pid;
-                const bool capturing_child =
-                    (cap != 0 && cap != launch && m_process_ops->is_running(cap));
-                const bool still_in_rebind_grace =  rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
-                if (capturing_child || still_in_rebind_grace) {
-                } else {
-                    notify_remote_exit_if_needed("launch_process_exited");
-                    break;
+                if (window_owner_pid != 0) {
+                    auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
+                    if (!h) {
+                        notify_remote_exit_if_needed("main_window_owner_open_failed");
+                        break;
+                    }
+                    DWORD exit_code = 0;
+                    if (!m_process_ops->get_exit_code(h.get(), exit_code)) {
+                        notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
+                        break;
+                    }
+                    if (exit_code != STILL_ACTIVE) {
+                        notify_remote_exit_if_needed("main_window_owner_exited");
+                        break;
+                    }
+                }
+                else if (m_pi.hProcess) {
+                    DWORD exit_code = 0;
+                    const bool ok = m_process_ops->get_exit_code(m_pi.hProcess, exit_code);
+                    if (ok && exit_code != STILL_ACTIVE) {
+                        const DWORD cap = m_capture_pid;
+                        const DWORD launch = m_launch_pid;
+                        const bool capturing_child = (cap != 0 && cap != launch && m_process_ops->is_running(cap));
+                        const bool still_in_rebind_grace = rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
+                        if (capturing_child || still_in_rebind_grace) {
+                        }
+                        else {
+                            notify_remote_exit_if_needed("launch_process_exited");
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -584,7 +498,7 @@ void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rem
     //1.写入基础遥测
     const uint64_t now_unix_ms = rpc_unix_epoch_ms();
     out_telemetry.last_frame_unix_ms = now_unix_ms;
-    fill_capture_backend_telemetry(out_telemetry);
+    out_telemetry.last_capture_used_hw = m_last_capture_used_hw;
 
     //2.无阻塞地“取走最新编码样本”Pop latest encoded sample (no blocking). If none, apply steady-hold fallback policy.
     EncodedSample es;
@@ -693,9 +607,7 @@ void remote_video_engine::try_recover_main_window()
 bool remote_video_engine::launch_attached_remote_process()
 {
     if (!m_process_ops) return false;
-    if (!m_process_ops->start(m_exe_path, 0, true)) {
-        return false;
-    }
+    if (!m_process_ops->start()) return false;
 
     m_launch_pid = m_process_ops->launch_pid();
     m_capture_pid = m_process_ops->capture_pid();
@@ -719,12 +631,4 @@ void remote_video_engine::apply_launch_window_placement(HWND hwnd)
 
     m_last_launch_placement_hwnd = hwnd;
     std::cout << "[proc_ui] launch_window_placement hwnd=" << static_cast<void*>(hwnd) << std::endl;
-}
-
-void remote_video_engine::fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const
-{
-    out_telemetry.last_capture_used_hw = m_last_capture_used_hw;
-    out_telemetry.dxgi_disabled_for_session = false;
-    out_telemetry.top_black_strip_streak = 0;
-    out_telemetry.dxgi_instability_score = 0;
 }

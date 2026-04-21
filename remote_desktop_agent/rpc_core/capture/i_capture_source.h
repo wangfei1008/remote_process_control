@@ -1,6 +1,5 @@
 #pragma once
 
-#include "capture/capture_init_context.h"
 #include "common/window_ops.h"
 #include "capture/process_ui_tile.h"
 
@@ -12,7 +11,7 @@ class ICaptureSource {
 public:
     virtual ~ICaptureSource() = default;
 
-    virtual bool init(const CaptureInitContext& ctx); // 默认 true
+    virtual bool init(); // 默认 true
     virtual void shutdown();
 
     /// 一次整帧：所有 HWND 瓦片须成功，否则返回 false（与原先 DXGI 批语义一致）。

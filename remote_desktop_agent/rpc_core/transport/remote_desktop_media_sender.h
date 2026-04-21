@@ -8,7 +8,7 @@
 
 #include "rtc/rtc.hpp"
 
-#include "session/remote_capture_telemetry.h"
+#include "common/remote_video_types.h"
 
 class ClientPeerConnection;
 struct ClientTrackData;

@@ -1,6 +1,6 @@
 #include "capture/i_capture_source.h"
 
-bool ICaptureSource::init(const CaptureInitContext&)
+bool ICaptureSource::init()
 {
     return true;
 }

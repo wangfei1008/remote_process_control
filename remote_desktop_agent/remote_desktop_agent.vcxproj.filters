@@ -191,16 +191,10 @@
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_init_context.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_kind_resolver.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_source_factory.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_grab_outcome.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\process_ui_capture.h">
@@ -257,9 +251,6 @@
     <ClInclude Include="rpc_core\session\remote_video_engine.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\session\remote_capture_telemetry.h">
-      <Filter>rpc_core\session</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\source\silence_opus_generator.h">
       <Filter>rpc_core\source</Filter>
     </ClInclude>
@@ -285,6 +276,9 @@
       <Filter>app</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\common\character_conversion.h">
+      <Filter>rpc_core\common</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\common\remote_video_types.h">
       <Filter>rpc_core\common</Filter>
     </ClInclude>
   </ItemGroup>

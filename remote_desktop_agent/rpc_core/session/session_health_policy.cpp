@@ -405,10 +405,7 @@ HWND SessionHealthPolicy::try_recover_main_window(const process_ops& proc,
 }
 
 
-bool SessionHealthPolicy::should_notify_remote_exit(bool had_successful_video,
-                                                    uint64_t now_ms,
-                                                    uint64_t& io_window_missing_since_unix_ms,
-                                                    uint32_t window_missing_exit_grace_ms)
+bool SessionHealthPolicy::should_notify_remote_exit(bool had_successful_video, uint64_t now_ms, uint64_t& io_window_missing_since_unix_ms, uint32_t window_missing_exit_grace_ms)
 {
     if (io_window_missing_since_unix_ms == 0)
         io_window_missing_since_unix_ms = now_ms;

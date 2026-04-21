@@ -140,6 +140,7 @@ public:
 
 public:
     process_ops() = default;
+    process_ops(const std::string& exe_path, DWORD creation_flags = 0, bool show_maximized = true);
     ~process_ops();
 
     process_ops(const process_ops&) = delete;
@@ -149,7 +150,7 @@ public:
     process_ops& operator=(process_ops&&) = default;
 
     // === 会话级操作 ===
-    bool start(const std::string& exe_path, DWORD creation_flags = 0, bool show_maximized = true);
+    bool start();
     void stop(bool terminate_launch_process = true, bool terminate_capture_process_if_child = true, UINT exit_code = 0);
     bool running() const;
 
@@ -191,6 +192,9 @@ private:
 
 private:
     std::string m_exe_path;
+    DWORD m_creation_flags;
+    bool m_show_maximized;
+
     process_info m_pi;
     DWORD m_launch_pid = 0;
     DWORD m_capture_pid = 0;

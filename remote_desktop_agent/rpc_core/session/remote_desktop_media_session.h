@@ -17,7 +17,7 @@ struct remote_desktop_media_session_impl;
 // - 对内：remote_video_engine（采集+编码+遥测）、silence_opus_generator、remote_desktop_media_sender
 class remote_desktop_media_session : public std::enable_shared_from_this<remote_desktop_media_session> {
 public:
-    remote_desktop_media_session(std::string exe_path,
+    remote_desktop_media_session(const std::string& exe_path,
                                    runtime_settings stream_settings,
                                    std::function<void()> on_remote_process_exit,
                                    std::function<void(const char* why, uint64_t missing_ms)> on_window_missing,
@@ -37,7 +37,6 @@ public:
 private:
     mutable std::mutex m_mutex;
 
-    std::string m_exe_path;
     runtime_settings m_stream_settings;
 
     std::weak_ptr<ClientPeerConnection> m_client_peer;

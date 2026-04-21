@@ -2,16 +2,11 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <optional>
-#include <deque>
 #include <string>
 #include <thread>
 #include <windows.h>
-#include <vector>
 
 #include "rtc/rtc.hpp"
 
@@ -19,9 +14,8 @@
 #include "capture/capture_kind_resolver.h"
 #include "capture/i_capture_source.h"
 #include "capture/process_ui_capture.h"
-#include "capture/capture_grab_outcome.h"
-#include "session/remote_capture_telemetry.h"
 #include "common/process_ops.h"
+#include "common/remote_video_types.h"
 
 class VideoEncodePipeline;
 
@@ -29,7 +23,7 @@ class VideoEncodePipeline;
 class remote_video_engine {
 public:
     using window_missing_fn = std::function<void(const char* why, uint64_t missing_ms)>;
-    remote_video_engine(std::string exe_path,  std::function<void()> on_remote_process_exit, window_missing_fn on_window_missing);
+    remote_video_engine(const std::string& exe_path,  std::function<void()> on_remote_process_exit, window_missing_fn on_window_missing);
     ~remote_video_engine();
 
     void start();
@@ -52,54 +46,13 @@ private:
     /// start + detach PROCESS_INFORMATION + 选主窗；失败返回 false。
     bool launch_attached_remote_process();
     void try_recover_main_window();
-    void fill_capture_backend_telemetry(remote_capture_telemetry& out_telemetry) const;
+
     /// 对远程主窗口执行一次最大化 + 置顶（每会话每个 HWND 仅做一次，可经 RPC_LAUNCH_WINDOW_* 关闭）。
     void apply_launch_window_placement(HWND hwnd);
-
-    struct CapturedFrame {
-        uint64_t frame_id = 0;
-        // Capture-complete absolute unix ms (epoch ms).
-        uint64_t unix_ms = 0;
-        // Unix epoch ms immediately before this frame's grab (scheduling / pre-capture).
-        uint64_t prep_unix_ms = 0;
-		CaptureGrabOutcome grab_outcome;
-    };
-
-    struct LatestFrameSlot {
-        std::mutex mtx;
-        std::condition_variable cv;
-        std::optional<CapturedFrame> latest;
-        uint64_t dropped_by_overwrite = 0;
-        uint64_t stored_frames = 0;
-    };
-
-    struct EncodedSample {
-        //帧序号
-        uint64_t frame_id = 0;
-        //编码完成时刻的绝对时间戳
-        uint64_t unix_ms = 0;
-        //采集完成时刻的绝对时间戳
-        uint64_t cap_unix_ms = 0;
-        //编码后的码流数据
-        rtc::binary sample;
-        //这帧采集是否走硬件路径(DXGI)，供遥测使用
-        bool used_hw_capture = false;
-        int w = 0;
-        int h = 0;
-    };
-
-    struct LatestEncodedQueue {
-        std::mutex mtx;
-        std::deque<EncodedSample> q;
-        size_t capacity = 1;
-        uint64_t dropped_by_overflow = 0;
-        uint64_t pushed = 0;
-    };
 
     void capture_loop();
     void encode_loop();
 private:
-    std::string m_exe_path;
     std::function<void()> m_on_remote_process_exit;
     window_missing_fn m_on_window_missing;
 
