@@ -10,6 +10,7 @@
 #include "input/input_controller.h"
 #include "common/process_ops.h"
 #include "session/session_health_policy.h"
+#include "session/capture_target_resolver.h"
 
 #include <chrono>
 #include <fstream>
@@ -47,25 +48,6 @@ static BmpDumpDiag make_bmp_dump_diag_from_hw(bool used_hw)
     d.dxgi_instability_score = 0;
     d.dxgi_disabled_for_session = false;
     return d;
-}
-
-HWND primary_hwnd_from_surfaces(const std::vector<window_ops::window_info>& surfaces)
-{
-    if (surfaces.empty()) return nullptr;
-    HWND best = nullptr;
-    int best_area = -1;
-    for (const auto& s : surfaces) 
-    {
-        const int w = s.rect_screen.right - s.rect_screen.left;
-        const int h = s.rect_screen.bottom - s.rect_screen.top;
-        const int a = w * h;
-        if (a > best_area) 
-        {
-            best_area = a;
-            best = s.hwnd;
-        }
-    }
-    return best;
 }
 
 } // namespace
@@ -158,8 +140,6 @@ void remote_video_engine::start()
         return;
     }
 
-    m_main_window = nullptr;
-
     reset_for_session_start();
 
     m_pi = {};
@@ -207,8 +187,6 @@ void remote_video_engine::stop()
         m_encode_thread.join();
     }
 
-    m_last_launch_placement_hwnd = nullptr;
-
     if (m_capture_source) {
         m_capture_source->shutdown();
     }
@@ -247,41 +225,60 @@ void remote_video_engine::notify_remote_exit_if_needed(const char* why)
 void remote_video_engine::exit_watch_loop()
 {
     while (m_running.load(std::memory_order_relaxed)) {
-        if (m_main_window) {
-            window_ops wops;
-            if (wops.is_valid(m_main_window)) {
-                DWORD  window_owner_pid = wops.get_window_pid(m_main_window);
+        if (m_process_ops) {
+            // Keep liveness checks consistent with capture target resolution (PID drift / rebind).
+            const auto resolved = CaptureTargetResolver::resolve(
+                *m_process_ops,
+                m_launch_pid,
+                m_capture_pid,
+                m_main_window,
+                m_process_ops->target_exe_base_name_lower(),
+                m_had_successful_video.load(std::memory_order_relaxed),
+                m_pid_rebind_deadline_unix_ms);
 
-                if (window_owner_pid != 0) {
-                    auto h = m_process_ops->open_process(window_owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);//主窗口所属 PID（window_owner_pid）为主判断
-                    if (!h) {
-                        notify_remote_exit_if_needed("main_window_owner_open_failed");
-                        break;
-                    }
-                    DWORD exit_code = 0;
-                    if (!m_process_ops->get_exit_code(h.get(), exit_code)) {
-                        notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
-                        break;
-                    }
-                    if (exit_code != STILL_ACTIVE) {
-                        notify_remote_exit_if_needed("main_window_owner_exited");
+            m_main_window = resolved.main_hwnd ? resolved.main_hwnd : m_main_window;
+
+            const DWORD owner_pid = resolved.main_hwnd_owner_pid;
+            const DWORD cap_pid = resolved.capture_pid;
+
+            // 1) Prefer main window owner PID when available.
+            if (owner_pid != 0) {
+                auto h = m_process_ops->open_process(owner_pid, PROCESS_QUERY_LIMITED_INFORMATION);
+                if (!h) {
+                    notify_remote_exit_if_needed("main_window_owner_open_failed");
+                    break;
+                }
+                DWORD exit_code = 0;
+                if (!m_process_ops->get_exit_code(h.get(), exit_code)) {
+                    notify_remote_exit_if_needed("main_window_owner_exit_code_failed");
+                    break;
+                }
+                if (exit_code != STILL_ACTIVE) {
+                    notify_remote_exit_if_needed("main_window_owner_exited");
+                    break;
+                }
+            } else if (cap_pid != 0) {
+                // 2) Fallback: if we have a capture PID but no main window, check it is still running.
+                if (!m_process_ops->is_running(cap_pid)) {
+                    // Preserve grace behavior for PID drift: allow a short rebind window before declaring exit.
+                    const bool still_in_rebind_grace = rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
+                    if (!still_in_rebind_grace) {
+                        notify_remote_exit_if_needed("capture_pid_exited");
                         break;
                     }
                 }
-                else if (m_pi.hProcess) {
-                    DWORD exit_code = 0;
-                    const bool ok = m_process_ops->get_exit_code(m_pi.hProcess, exit_code);
-                    if (ok && exit_code != STILL_ACTIVE) {
-                        const DWORD cap = m_capture_pid;
-                        const DWORD launch = m_launch_pid;
-                        const bool capturing_child = (cap != 0 && cap != launch && m_process_ops->is_running(cap));
-                        const bool still_in_rebind_grace = rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
-                        if (capturing_child || still_in_rebind_grace) {
-                        }
-                        else {
-                            notify_remote_exit_if_needed("launch_process_exited");
-                            break;
-                        }
+            } else if (m_pi.hProcess) {
+                // 3) Last fallback: launch handle exit (legacy behavior).
+                DWORD exit_code = 0;
+                const bool ok = m_process_ops->get_exit_code(m_pi.hProcess, exit_code);
+                if (ok && exit_code != STILL_ACTIVE) {
+                    const DWORD cap = m_capture_pid;
+                    const DWORD launch = m_launch_pid;
+                    const bool capturing_child = (cap != 0 && cap != launch && m_process_ops->is_running(cap));
+                    const bool still_in_rebind_grace = rpc_unix_epoch_ms() <= m_pid_rebind_deadline_unix_ms + 3000;
+                    if (!(capturing_child || still_in_rebind_grace)) {
+                        notify_remote_exit_if_needed("launch_process_exited");
+                        break;
                     }
                 }
             }
@@ -308,13 +305,13 @@ void remote_video_engine::capture_loop()
             continue;
         }
 
-		// Re-validate main window each tick to handle dynamic surface changes; if lost, attempt recovery and health check.
-        window_ops wops;
-        const std::vector<window_ops::window_info> surfaces = wops.enumerate_visible_top_level(m_capture_pid);
+        //1. Resolve capture PID + surfaces (handles PID drift / rebind).
+        const auto resolved = CaptureTargetResolver::resolve(*m_process_ops, m_launch_pid, m_capture_pid, m_main_window, m_process_ops ? m_process_ops->target_exe_base_name_lower() : std::string{}, m_had_successful_video.load(std::memory_order_relaxed),m_pid_rebind_deadline_unix_ms);
+        const std::vector<window_ops::window_info> surfaces = resolved.surfaces;
 
         if (surfaces.empty()) {
             m_main_window = nullptr;
-			try_recover_main_window();//尝试恢复主窗口：先按 PID 找，启动窗口期内按 exe 名重绑。
+            //1.1 Resolver already attempted recovery and may have rebound m_capture_pid.
             const bool notify = SessionHealthPolicy::should_notify_remote_exit(m_had_successful_video.load(std::memory_order_relaxed), now_unix_ms, m_window_missing_since_unix_ms, m_window_missing_exit_grace_ms);
             if (notify) {
                 if (is_remote_process_still_running()) {
@@ -327,16 +324,20 @@ void remote_video_engine::capture_loop()
             }
             std::cout << "[capture] no surfaces found for pid=" << m_capture_pid
                       << " main_window=" << static_cast<void*>(m_main_window)
+                      << " resolver_why=" << (resolved.why ? resolved.why : "")
+                      << " prev_pid=" << resolved.previous_capture_pid
+                      << " owner_pid=" << resolved.main_hwnd_owner_pid
+                      << " pid_rebound=" << (resolved.capture_pid_rebound ? 1 : 0)
+                      << " main_from_surfaces=" << (resolved.main_hwnd_selected_from_surfaces ? 1 : 0)
                       << " notify_remote_exit_if_needed=" << notify
 				<< std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
             continue;
         }
 
-        m_main_window = primary_hwnd_from_surfaces(surfaces);//选主窗口,以最大面积者优先
-        apply_launch_window_placement(m_main_window);//可能执行一次窗口摆放
+        m_main_window = resolved.main_hwnd; // 主窗口选择策略统一由 resolver 负责
 
-        // Capture and compose.
+        //2. Capture and compose.
         const uint64_t prep_unix_ms = rpc_unix_epoch_ms();
         const uint64_t frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
         rpc_video_contract::RawFrame rf;
@@ -510,8 +511,6 @@ HWND remote_video_engine::get_main_window() const
 
 void remote_video_engine::reset_for_session_start()
 {
-    m_last_launch_placement_hwnd = nullptr;
-
     m_had_successful_video.store(false, std::memory_order_relaxed);
 
     m_window_missing_since_unix_ms = 0;
@@ -519,28 +518,6 @@ void remote_video_engine::reset_for_session_start()
     if (m_video_encode_pipeline) m_video_encode_pipeline->reset_for_stream_start();
     if (m_capture_source) m_capture_source->reset_session_recovery();
     m_bmp_dump.reset_session();
-}
-
-void remote_video_engine::try_recover_main_window()
-{
-    if (!m_process_ops) return;
-
-    if (m_main_window && SessionHealthPolicy::is_window_viable_for_capture(m_main_window)) return;
-    m_main_window = nullptr;
-
-    std::string exe_base_name = m_process_ops->target_exe_base_name_lower();
-    if (exe_base_name.empty()) return;
-
-    m_main_window = SessionHealthPolicy::try_recover_main_window(
-        *m_process_ops,
-        m_launch_pid,
-        m_capture_pid,
-        exe_base_name,
-        true,
-        m_had_successful_video.load(std::memory_order_relaxed),
-        m_pid_rebind_deadline_unix_ms);
-
-    apply_launch_window_placement(m_main_window);
 }
 
 bool remote_video_engine::launch_attached_remote_process()
@@ -552,22 +529,8 @@ bool remote_video_engine::launch_attached_remote_process()
     m_capture_pid = m_process_ops->capture_pid();
     m_process_ops->detach_launch_process_info(m_pi);
 
-    // 不要因等待窗口而阻塞流创建。
-    m_main_window = SessionHealthPolicy::find_main_window(m_launch_pid);
+    // 不要因等待窗口而阻塞流创建：但要允许 PID 漂移重绑（如 notepad）。
+    auto res = CaptureTargetResolver::resolve(*m_process_ops, m_launch_pid, m_capture_pid, nullptr, m_process_ops->target_exe_base_name_lower(),false, rpc_unix_epoch_ms() + 5000);
+    m_main_window = res.main_hwnd;
     return true;
-}
-
-void remote_video_engine::apply_launch_window_placement(HWND hwnd)
-{
-    window_ops wops;
-    if (!wops.is_valid(hwnd)) return;
-    if (hwnd == m_last_launch_placement_hwnd) return;
-
-    (void)AllowSetForegroundWindow(ASFW_ANY);
-
-    //ShowWindow(hwnd, SW_MAXIMIZE);
-    //SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-
-    m_last_launch_placement_hwnd = hwnd;
-    std::cout << "[proc_ui] launch_window_placement hwnd=" << static_cast<void*>(hwnd) << std::endl;
 }

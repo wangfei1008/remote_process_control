@@ -54,10 +54,6 @@ private:
     void reset_for_session_start();
     /// start + detach PROCESS_INFORMATION + 选主窗；失败返回 false。
     bool launch_attached_remote_process();
-    void try_recover_main_window();
-
-    /// 对远程主窗口执行一次最大化 + 置顶（每会话每个 HWND 仅做一次，可经 RPC_LAUNCH_WINDOW_* 关闭）。
-    void apply_launch_window_placement(HWND hwnd);
 
     void capture_loop();
     void encode_loop();
@@ -72,7 +68,6 @@ private:
     DWORD m_capture_pid = 0;
     DWORD m_launch_pid = 0;
     HWND m_main_window = nullptr;
-    HWND m_last_launch_placement_hwnd = nullptr;
 
     std::thread m_exit_watch_thread;
     std::thread m_capture_thread;
