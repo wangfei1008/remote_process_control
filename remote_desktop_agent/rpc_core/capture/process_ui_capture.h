@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/remote_video_types.h"
+#include "common/remote_video_contract.h"
 #include "common/window_ops.h"
 #include "common/character_conversion.h"
 
@@ -18,6 +18,19 @@ enum class ProcessUiCompositeLayout {
     Vertical,
     Grid,
 };
+
+
+struct CaptureGrabOutcome {
+    bool ok = true;
+    bool need_hold_on_empty_fallback = false;
+    bool used_hw_capture = false;
+    int width = 0;
+    int height = 0;
+    int cap_min_left = 0;
+    int cap_min_top = 0;
+    std::vector<uint8_t> frame;
+};
+
 
 struct ProcessUiCaptureOptions {
     ProcessUiCompositeLayout composite_layout = ProcessUiCompositeLayout::Bbox;
@@ -38,4 +51,17 @@ public:
                                                   const ProcessUiCaptureOptions& options,
                                                   ICaptureSource& capture,
                                                   uint64_t now_unix_ms);
+
+    /// Contract version: capture + compose into RawFrame (CPU/RGB24), plus telemetry snapshot.
+    /// - prep_unix_ms: unix epoch ms immediately before grabbing tiles
+    /// - out_telem timestamps are unix epoch ms
+    static bool grab_process_ui_raw_frame(DWORD pid,
+                                          const std::vector<window_ops::window_info>& surfaces,
+                                          const ProcessUiCaptureOptions& options,
+                                          ICaptureSource& capture,
+                                          uint64_t now_unix_ms,
+                                          uint64_t prep_unix_ms,
+                                          uint64_t frame_id,
+                                          rpc_video_contract::RawFrame& out_frame,
+                                          rpc_video_contract::TelemetrySnapshot& out_telem);
 };

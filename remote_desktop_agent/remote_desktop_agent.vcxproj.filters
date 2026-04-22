@@ -96,9 +96,6 @@
     <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\frame_sanitizer.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
@@ -218,9 +215,6 @@
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\frame_sanitizer.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\common\process_ops.h">
       <Filter>rpc_core\common</Filter>
     </ClInclude>
@@ -278,8 +272,11 @@
     <ClInclude Include="rpc_core\common\character_conversion.h">
       <Filter>rpc_core\common</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\common\remote_video_types.h">
+    <ClInclude Include="rpc_core\common\remote_video_contract.h">
       <Filter>rpc_core\common</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h">
+      <Filter>rpc_core\session</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

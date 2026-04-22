@@ -36,7 +36,6 @@
     <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp" />
-    <ClCompile Include="rpc_core\capture\frame_sanitizer.cpp" />
     <ClCompile Include="rpc_core\encode\h264_encoder.cpp" />
     <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp" />
     <ClCompile Include="rpc_core\common\process_ops.cpp" />
@@ -56,7 +55,8 @@
     <ClInclude Include="bootstrap\runtime_settings.h" />
     <ClInclude Include="input\input_controller.h" />
     <ClInclude Include="rpc_core\common\character_conversion.h" />
-    <ClInclude Include="rpc_core\common\remote_video_types.h" />
+    <ClInclude Include="rpc_core\common\remote_video_contract.h" />
+    <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h" />
     <ClInclude Include="signaling\signaling_event.h" />
     <ClInclude Include="signaling\signaling_observer.h" />
     <ClInclude Include="signaling\signaling_transport.h" />
@@ -76,7 +76,6 @@
     <ClInclude Include="rpc_core\capture\process_ui_capture.h" />
     <ClInclude Include="rpc_core\capture\capture_discard_policy.h" />
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
-    <ClInclude Include="rpc_core\capture\frame_sanitizer.h" />
     <ClInclude Include="rpc_core\common\process_ops.h" />
     <ClInclude Include="rpc_core\common\rpc_time.h" />
     <ClInclude Include="rpc_core\common\window_ops.h" />

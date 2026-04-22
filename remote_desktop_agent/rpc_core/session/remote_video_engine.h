@@ -15,9 +15,20 @@
 #include "capture/i_capture_source.h"
 #include "capture/process_ui_capture.h"
 #include "common/process_ops.h"
-#include "common/remote_video_types.h"
+#include "common/remote_video_contract.h"
+#include "session/remote_video_engine_impl_types.h"
 
 class VideoEncodePipeline;
+
+struct CapturedRawFrameWithTelemetry {
+    rpc_video_contract::RawFrame frame;
+    rpc_video_contract::TelemetrySnapshot telem;
+};
+
+struct EncodedFrameWithTelemetry {
+    rpc_video_contract::TelemetrySnapshot telem{};
+    rtc::binary payload_storage{};
+};
 
 // 视频引擎：进程全界面采集（不完整帧丢弃）+ 编码
 class remote_video_engine {
@@ -29,7 +40,7 @@ public:
     void start();
     void stop();
 
-    void produce_next_video_sample(rtc::binary& out_sample, remote_capture_telemetry& out_telemetry);
+    void produce_next_video_sample(rtc::binary& out_sample, rpc_video_contract::TelemetrySnapshot& out_telem);
 
     void request_force_keyframe();
     HWND get_main_window() const;
@@ -39,8 +50,6 @@ private:
     void notify_window_missing_if_needed(const char* why, uint64_t now_unix_ms);
     bool is_remote_process_still_running() const;
     void exit_watch_loop();
-
-    void apply_emit_fail_policy(rtc::binary& out_sample, bool request_idr);
 
     void reset_for_session_start();
     /// start + detach PROCESS_INFORMATION + 选主窗；失败返回 false。
@@ -72,16 +81,8 @@ private:
     std::atomic<bool> m_threads_running{false};
     std::atomic<uint64_t> m_frame_id_seq{0};
 
-    LatestFrameSlot m_latest_frame;
-    LatestEncodedQueue m_latest_encoded;
-
-    // Shared snapshot for telemetry fields filled by encode thread.
-    std::mutex m_last_enc_mtx;
-    uint64_t m_last_capture_unix_ms = 0;
-    uint64_t m_last_prep_unix_ms = 0;
-    uint64_t m_last_frame_unix_ms = 0;
-    int m_last_capture_w = 0;
-    int m_last_capture_h = 0;
+    rpc_video_engine_impl::LatestRawFrame<CapturedRawFrameWithTelemetry> m_latest_frame;
+    rpc_video_engine_impl::BoundedQueue<EncodedFrameWithTelemetry> m_latest_encoded;
 
 	std::unique_ptr<process_ops> m_process_ops;
 
@@ -104,19 +105,8 @@ private:
     BmpDumpWriter m_bmp_dump;
     std::atomic<bool> m_had_successful_video{false};
 
-    bool m_steady_frame_hold = false;
-
-    std::mutex m_last_good_sample_mtx;
-    rtc::binary m_last_good_video_sample;
-    std::atomic<bool> m_have_last_good_sample{false};
-    std::vector<uint8_t> m_last_good_rgb_frame;
-    int m_last_good_rgb_w = 0;
-    int m_last_good_rgb_h = 0;
 
 	uint64_t m_window_missing_since_unix_ms = 0;//第一次检测到窗口缺失的时间戳，用于判断是否超过 grace 时间阈值以触发远程退出通知。
 	uint32_t m_window_missing_exit_grace_ms = 0;//窗口缺失触发远程退出通知的宽限时间，单位毫秒，构造时从配置加载。
     uint64_t m_last_window_missing_notify_unix_ms = 0;
-
-    /// 上一帧 grab 是否走 HW（DXGI），供遥测。
-    bool m_last_capture_used_hw = false;
 };

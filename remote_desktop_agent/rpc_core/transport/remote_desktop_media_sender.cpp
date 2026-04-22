@@ -8,7 +8,24 @@
 #include <cstddef>
 #include <chrono>
 #include <iostream>
+#include <sstream>
 #include <vector>
+
+static std::string format_unix_ms_local(uint64_t unix_ms)
+{
+    const std::time_t sec = static_cast<std::time_t>(unix_ms / 1000);
+    const int ms = static_cast<int>(unix_ms % 1000);
+    std::tm tm_local{};
+#if defined(_WIN32)
+    localtime_s(&tm_local, &sec);
+#else
+    localtime_r(&sec, &tm_local);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm_local, "%Y-%m-%d %H:%M:%S")
+        << '.' << std::setw(3) << std::setfill('0') << ms;
+    return oss.str();
+}
 
 static bool LooksLikeAnnexB(const rtc::binary& b)
 {
@@ -141,7 +158,7 @@ void remote_desktop_media_sender::maybe_stop_if_no_clients(const std::vector<std
 
 void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
                                                    const rtc::binary& video_sample,
-                                                   const remote_capture_telemetry& telemetry)
+                                                   const rpc_video_contract::TelemetrySnapshot& telemetry)
 {
     const auto clients = m_snapshot_clients ? m_snapshot_clients() : std::vector<std::shared_ptr<ClientPeerConnection>>{};
 
@@ -156,13 +173,15 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
         const uint64_t sendMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-        uint64_t capMs = telemetry.last_capture_unix_ms;
-        uint64_t encMs = telemetry.last_encode_unix_ms ? telemetry.last_encode_unix_ms : telemetry.last_frame_unix_ms;
-        if (capMs == 0) capMs = telemetry.last_frame_unix_ms;
-        if (encMs == 0) encMs = telemetry.last_frame_unix_ms;
+        uint64_t capMs = static_cast<uint64_t>(telemetry.capture_unix_ms);
+        uint64_t encMs = static_cast<uint64_t>(telemetry.encode_unix_ms)
+            ? static_cast<uint64_t>(telemetry.encode_unix_ms)
+            : static_cast<uint64_t>(telemetry.frame_unix_ms);
+        if (capMs == 0) capMs = static_cast<uint64_t>(telemetry.frame_unix_ms);
+        if (encMs == 0) encMs = static_cast<uint64_t>(telemetry.frame_unix_ms);
         if (capMs == 0) capMs = sendMs;
         if (encMs == 0) encMs = sendMs;
-        uint64_t prepMs = telemetry.last_prep_unix_ms;
+        uint64_t prepMs = static_cast<uint64_t>(telemetry.prep_unix_ms);
         if (prepMs == 0) prepMs = capMs;
 
         const bool isAnnexB = LooksLikeAnnexB(video_sample);
@@ -208,11 +227,11 @@ void remote_desktop_media_sender::send_video_control_messages(
     const std::vector<std::shared_ptr<ClientPeerConnection>>& clients,
     uint64_t video_sample_time_us,
     const rtc::binary& video_sample,
-    const remote_capture_telemetry& telemetry)
+    const rpc_video_contract::TelemetrySnapshot& telemetry)
 {
     // 分辨率变化：依赖 telemetry（阶段性先用 0/真实由后续 engine 填充）
-    const int curW = telemetry.capture_width;
-    const int curH = telemetry.capture_height;
+    const int curW = telemetry.capture_size.w;
+    const int curH = telemetry.capture_size.h;
     if (curW > 0 && curH > 0 && (curW != m_last_video_w || curH != m_last_video_h)) {
         m_last_video_w = curW;
         m_last_video_h = curH;
@@ -233,8 +252,13 @@ void remote_desktop_media_sender::send_video_control_messages(
     const auto now = std::chrono::steady_clock::now();
     if (now - m_last_log > std::chrono::seconds(1)) {
         m_last_log = now;
-        std::cout << "[video] sampleTime(us)=" << video_sample_time_us << " size=" << video_sample.size() << std::endl;
-        std::cout << "[latency][sender] frame_unix_ms=" << telemetry.last_frame_unix_ms << std::endl;
+        std::cout << "[latency][sender] id =" << telemetry.frame_id
+            << " size(" << telemetry.capture_size.w << "," << telemetry.capture_size.h << ")"
+            << " frame time =" << format_unix_ms_local(telemetry.frame_unix_ms)
+            << " prep time =" << format_unix_ms_local(telemetry.prep_unix_ms)
+            << " cap time =" << format_unix_ms_local(telemetry.capture_unix_ms)
+            << " enc time =" << format_unix_ms_local(telemetry.encode_unix_ms)
+            << std::endl;
     }
 
     // Only emit captureHealth when we have a real video frame.
@@ -246,7 +270,7 @@ void remote_desktop_media_sender::send_video_control_messages(
     if ((m_video_frame_index % m_capture_health_interval) == 0) {
         const nlohmann::json health = {
             { "type", "captureHealth" },
-            { "backend", telemetry.last_capture_used_hw ? "dxgi" : "gdi" },
+            { "backend", telemetry.backend == rpc_video_contract::CaptureBackend::Dxgi ? "dxgi" : "gdi" },
         };
 
         const std::string healthPayload = health.dump();

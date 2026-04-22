@@ -110,7 +110,7 @@ void remote_desktop_media_session::start_media_session()
 
             if (m_impl->m_next_video_time_us <= m_impl->m_next_audio_time_us) {
                 rtc::binary video_sample;
-                remote_capture_telemetry telemetry;
+                rpc_video_contract::TelemetrySnapshot telemetry;
 
                 static std::uint64_t s_video_loop_tick = 0;
                 ++s_video_loop_tick;

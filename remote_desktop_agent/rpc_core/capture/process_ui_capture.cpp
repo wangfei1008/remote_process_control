@@ -6,6 +6,8 @@
 #include "common/rpc_time.h"
 #include "common/window_ops.h"
 
+#include "capture/capture_rgb_heuristics.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -14,8 +16,14 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <vector>
 
 namespace {
+
+static void release_vector_u8(void* opaque)
+{
+    delete static_cast<std::vector<uint8_t>*>(opaque);
+}
 
 void make_even(int& v)
 {
@@ -278,4 +286,69 @@ CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
         outcome.frame.clear();
     }
     return outcome;
+}
+
+bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
+                                                 const std::vector<window_ops::window_info>& surfaces,
+                                                 const ProcessUiCaptureOptions& options,
+                                                 ICaptureSource& capture,
+                                                 uint64_t now_unix_ms,
+                                                 uint64_t prep_unix_ms,
+                                                 uint64_t frame_id,
+                                                 rpc_video_contract::RawFrame& out_frame,
+                                                 rpc_video_contract::TelemetrySnapshot& out_telem)
+{
+    out_frame = rpc_video_contract::RawFrame{};
+    out_telem = rpc_video_contract::TelemetrySnapshot{};
+
+    // Keep telemetry valid even when capture fails.
+    out_telem.frame_unix_ms = static_cast<rpc_video_contract::TimeUs>(now_unix_ms);
+    out_telem.prep_unix_ms = static_cast<rpc_video_contract::TimeUs>(prep_unix_ms);
+    out_telem.backend = capture.uses_hw_capture() ? rpc_video_contract::CaptureBackend::Dxgi : rpc_video_contract::CaptureBackend::Gdi;
+    out_telem.frame_id = frame_id;
+
+    // Reuse existing implementation for now.
+    CaptureGrabOutcome o = grab_process_ui_rgb(pid, surfaces, options, capture, now_unix_ms);
+    if (!o.ok || o.frame.empty() || o.width <= 0 || o.height <= 0)  return false;
+
+    // 步骤 1：读取是否启用「可疑帧/黑帧」过滤（可由 RPC_FILTER_CAPTURE_BLACK_FRAMES 关闭）。
+    const bool filter_black = runtime_config::get_bool("RPC_FILTER_CAPTURE_BLACK_FRAMES", true);
+    // 1a：关闭过滤则一律放行,整帧可疑（如全黑启动画面）则丢弃，
+    if (filter_black && capture_rgb::is_suspicious_capture_frame(o.frame, o.width, o.height)) {
+        std::cout << "[capture] discard suspicious frame before first video (e.g. black startup)\n";
+        return false;
+    }
+
+    const uint64_t cap_done_unix_ms = rpc_unix_epoch_ms();
+
+    out_telem.capture_size = rpc_video_contract::VideoSize{ o.width, o.height };
+    out_telem.capture_unix_ms = static_cast<rpc_video_contract::TimeUs>(cap_done_unix_ms);
+    out_telem.encode_unix_ms = 0;
+    out_telem.backend = o.used_hw_capture ? rpc_video_contract::CaptureBackend::Dxgi
+                                         : rpc_video_contract::CaptureBackend::Gdi;
+
+    out_frame.frame_id = frame_id;
+    out_frame.pts_us = static_cast<rpc_video_contract::TimeUs>(cap_done_unix_ms) * 1000;
+    out_frame.dts_us = out_frame.pts_us;
+    out_frame.coded_size = rpc_video_contract::VideoSize{ o.width, o.height };
+    out_frame.visible_rect = rpc_video_contract::VideoRect{ o.cap_min_left, o.cap_min_top, o.width, o.height };
+    out_frame.display_size = rpc_video_contract::VideoSize{};
+    out_frame.format = rpc_video_contract::PixelFormat::RGB24;
+    out_frame.rotation = rpc_video_contract::Rotation::R0;
+    out_frame.is_screen_content = true;
+    out_frame.storage = rpc_video_contract::FrameStorageKind::Cpu;
+
+    // Move RGB buffer into contract-owned heap vector (zero-copy on the data).
+    auto* vec = new std::vector<uint8_t>(std::move(o.frame));
+    out_frame.owned.bytes.data = vec->data();
+    out_frame.owned.bytes.size = static_cast<uint32_t>(vec->size());
+    out_frame.owned.opaque = vec;
+    out_frame.owned.release = &release_vector_u8;
+
+    out_frame.plane_count = 1;
+    out_frame.planes[0].data = vec->data();
+    out_frame.planes[0].stride_bytes = o.width * 3;
+    out_frame.planes[0].size_bytes = static_cast<uint32_t>(vec->size());
+
+    return true;
 }

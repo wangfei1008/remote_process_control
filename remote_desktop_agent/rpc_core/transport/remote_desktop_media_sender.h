@@ -8,7 +8,7 @@
 
 #include "rtc/rtc.hpp"
 
-#include "common/remote_video_types.h"
+#include "common/remote_video_contract.h"
 
 class ClientPeerConnection;
 struct ClientTrackData;
@@ -25,7 +25,7 @@ public:
 
     void on_video_sample(uint64_t video_sample_time_us,
                           const rtc::binary& video_sample,
-                          const remote_capture_telemetry& telemetry);
+                          const rpc_video_contract::TelemetrySnapshot& telemetry);
 
     void on_audio_sample(uint64_t audio_sample_time_us,
                           const rtc::binary& audio_sample);
@@ -35,7 +35,7 @@ private:
     void send_video_control_messages(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients,
                                        uint64_t video_sample_time_us,
                                        const rtc::binary& video_sample,
-                                       const remote_capture_telemetry& telemetry);
+                                       const rpc_video_contract::TelemetrySnapshot& telemetry);
 
     void send_media_frames(bool is_video,
                             const rtc::binary& sample,

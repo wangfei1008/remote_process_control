@@ -192,14 +192,15 @@ struct EncodedFrame {
 enum class CaptureBackend : uint8_t { Unknown = 0, Gdi = 1, Dxgi = 2 };
 
 struct TelemetrySnapshot {
+    uint64_t frame_id = 0;
     VideoSize capture_size{};
     CaptureBackend backend = CaptureBackend::Unknown;
 
     // 墙钟链路（用于 sender SEI/DataChannel）
-    TimeUs last_frame_unix_ms = 0;
-    TimeUs last_prep_unix_ms = 0;
-    TimeUs last_capture_unix_ms = 0;
-    TimeUs last_encode_unix_ms = 0;
+    TimeUs frame_unix_ms = 0;
+    TimeUs prep_unix_ms = 0;
+    TimeUs capture_unix_ms = 0;
+    TimeUs encode_unix_ms = 0;
 
     uint32_t struct_size = sizeof(TelemetrySnapshot);
     uint32_t reserved_u32[8] = {};

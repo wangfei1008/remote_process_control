@@ -52,7 +52,9 @@ std::string process_ops::basename_from_path(const std::string& path)
 /////////////////////////////////////////////////////////////////////////////
 bool process_ops::start()
 {
+    std::string path = m_exe_path;
     stop(false, true, 0);
+    m_exe_path = path;
 
     STARTUPINFOA si{};
     si.cb = sizeof(si);
@@ -67,7 +69,7 @@ bool process_ops::start()
         m_capture_pid = 0;
         return false;
     }
-
+    m_target_exe_base_name_lower = to_lower_ascii(basename_from_path(m_exe_path));
     m_pi.get() = pi;
     m_launch_pid = pi.dwProcessId;
     m_capture_pid = m_launch_pid;

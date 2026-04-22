@@ -2,7 +2,6 @@
 
 #include "app/runtime_config.h"
 #include "capture/capture_source_factory.h"
-#include "capture/frame_sanitizer.h"
 #include "capture/process_ui_capture.h"
 #include "common/rpc_time.h"
 #include "common/window_ops.h"
@@ -18,15 +17,31 @@
 #include <algorithm>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <windows.h>
 
 namespace {
 
-BmpDumpDiag make_bmp_dump_diag(const CaptureGrabOutcome& o)
+static void release_raw_frame_owned(rpc_video_contract::RawFrame& f)
+{
+    if (f.owned.release && f.owned.opaque) {
+        f.owned.release(f.owned.opaque);
+    }
+    f.owned = {};
+    f.plane_count = 0;
+    for (auto& p : f.planes) p = {};
+    if (f.gpu.release && f.gpu.opaque) {
+        f.gpu.release(f.gpu.opaque);
+    }
+    f.gpu = {};
+    f.ext = nullptr;
+}
+
+static BmpDumpDiag make_bmp_dump_diag_from_hw(bool used_hw)
 {
     BmpDumpDiag d;
-    d.use_hw_capture = o.used_hw_capture;
+    d.use_hw_capture = used_hw;
     d.force_software_active = false;
     d.top_black_strip_streak = 0;
     d.dxgi_instability_score = 0;
@@ -78,11 +93,9 @@ remote_video_engine::remote_video_engine(const std::string& exe_path, std::funct
         m_capture_kind = ProcessCaptureKind::Gdi;
         std::cout << "[capture] RPC_CAPTURE_BACKEND=" << backend_cfg
                   << " unavailable at init; strict mode — no GDI fallback, capture backend not created.\n";
-        m_steady_frame_hold = true;
         m_capture_source.reset();
     } else {
         m_capture_kind = resolved.kind;
-        m_steady_frame_hold = (m_capture_kind == ProcessCaptureKind::Gdi);
         m_capture_source = create_capture_source(m_capture_kind);
         if (m_capture_source) {
             m_capture_source->init();
@@ -278,28 +291,10 @@ void remote_video_engine::exit_watch_loop()
     }
 }
 
-void remote_video_engine::apply_emit_fail_policy(rtc::binary& out_sample, const bool request_idr)
-{
-    if (m_steady_frame_hold && m_have_last_good_sample.load(std::memory_order_relaxed)) {
-        std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);
-        out_sample = m_last_good_video_sample;
-    } else {
-        out_sample.clear();
-    }
-    if (request_idr && m_have_last_good_sample.load(std::memory_order_relaxed)) {
-        request_force_keyframe();
-    }
-}
 
 //采集生产者,不断抓取进程 UI 画面（DXGI/GDI）并合成 RGB 帧，写入最新帧槽位。
 void remote_video_engine::capture_loop()
 {
-    // Local state for frame sanitization; capture thread owns rgb history.
-    std::vector<uint8_t> last_good_rgb;
-    int last_good_w = 0;
-    int last_good_h = 0;
-    bool had_successful_video = false;
-
     // pacing
     const int fps = (std::max)(1, m_video_fps);
     const auto frame_period = std::chrono::microseconds(1000000 / fps);
@@ -343,45 +338,36 @@ void remote_video_engine::capture_loop()
 
         // Capture and compose.
         const uint64_t prep_unix_ms = rpc_unix_epoch_ms();
-        CaptureGrabOutcome outcome = ProcessUiCapture::grab_process_ui_rgb(m_capture_pid, surfaces, m_ui_capture_options, *m_capture_source, now_unix_ms);
+        const uint64_t frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+        rpc_video_contract::RawFrame rf;
+        rpc_video_contract::TelemetrySnapshot telem;
+        const bool ok = ProcessUiCapture::grab_process_ui_raw_frame(m_capture_pid, surfaces, m_ui_capture_options, *m_capture_source, now_unix_ms, prep_unix_ms, frame_id, rf, telem);
 
-        m_last_capture_used_hw = outcome.used_hw_capture;
-
-        if (!outcome.ok || outcome.frame.empty() || outcome.width <= 0 || outcome.height <= 0) {
+        if (!ok) {
             // No new frame; pacing continues.
         } else {
+            auto* vec = static_cast<std::vector<uint8_t>*>(rf.owned.opaque);
+            const int w = rf.coded_size.w;
+            const int h = rf.coded_size.h;
+            
             // Sanitize in capture thread; do not treat drops as session health failures.
-            const bool keep = FrameSanitizer::sanitize_frame(outcome.frame, outcome.width, outcome.height, had_successful_video, !last_good_rgb.empty(), last_good_rgb, last_good_w, last_good_h);
+            input_controller::instance()->set_capture_screen_rect(rf.visible_rect.x, rf.visible_rect.y, w, h);
 
-            if (keep) {
-                // Absolute unix-ms timestamp at "capture-complete" moment (used for per-frame SEI timestamps).
-                const uint64_t cap_done_unix_ms = rpc_unix_epoch_ms();
+            const BmpDumpDiag bmp_diag = make_bmp_dump_diag_from_hw(telem.backend == rpc_video_contract::CaptureBackend::Dxgi);
+            m_bmp_dump.dump_capture_if_needed(*vec, w, h, bmp_diag);
 
-                input_controller::instance()->set_capture_screen_rect(outcome.cap_min_left, outcome.cap_min_top, outcome.width, outcome.height);
+            CapturedRawFrameWithTelemetry pkt;
+            pkt.frame = std::move(rf);
+            pkt.telem = telem;
 
-                const BmpDumpDiag bmp_diag = make_bmp_dump_diag(outcome);
-                m_bmp_dump.dump_capture_if_needed(outcome.frame, outcome.width, outcome.height, bmp_diag);
-
-                // Update sanitizer history before moving outcome.frame away.
-                last_good_rgb = outcome.frame; // copy; can be optimized later with buffer reuse.
-                last_good_w = outcome.width;
-                last_good_h = outcome.height;
-                had_successful_video = true;
-
-                // Store latest frame with overwrite semantics.
-                CapturedFrame cf;
-                cf.frame_id = m_frame_id_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-                cf.unix_ms = cap_done_unix_ms;
-                cf.prep_unix_ms = prep_unix_ms;
-				cf.grab_outcome = outcome;
-				cf.grab_outcome.frame = std::move(outcome.frame); // ensure frame data moves with the outcome for potential diagnostics.
-
-                {
-                    std::lock_guard<std::mutex> lk(m_latest_frame.mtx);
-                    m_latest_frame.latest = std::move(cf);
+            {
+                std::lock_guard<std::mutex> lk(m_latest_frame.mtx);
+                if (m_latest_frame.latest.has_value()) {
+                    release_raw_frame_owned(m_latest_frame.latest->frame);
                 }
-                m_latest_frame.cv.notify_one();
+                m_latest_frame.latest = std::move(pkt);
             }
+            m_latest_frame.cv.notify_one();
         }
 
         // Pacing.
@@ -402,133 +388,109 @@ void remote_video_engine::encode_loop()
     uint64_t last_encoded_id = 0;
 
     while (m_threads_running.load(std::memory_order_acquire)) {
-        std::optional<CapturedFrame> frame;
+        std::optional<CapturedRawFrameWithTelemetry> packet;
         {
             //1.等待新帧（最多 50ms）
             std::unique_lock<std::mutex> lk(m_latest_frame.mtx);
             m_latest_frame.cv.wait_for(lk, std::chrono::milliseconds(50), [&] {
-                return !m_threads_running.load(std::memory_order_acquire) || (m_latest_frame.latest.has_value() && m_latest_frame.latest->frame_id != last_encoded_id);
+                return !m_threads_running.load(std::memory_order_acquire) ||
+                       (m_latest_frame.latest.has_value() && m_latest_frame.latest->frame.frame_id != last_encoded_id);
             });
             if (!m_threads_running.load(std::memory_order_acquire)) break;
             if (!m_latest_frame.latest.has_value()) continue;
-            if (m_latest_frame.latest->frame_id == last_encoded_id) continue;
+            if (m_latest_frame.latest->frame.frame_id == last_encoded_id) continue;
             
             //2.“拿走最新帧”并立即释放锁Take a snapshot of the latest (copy/move rgb to avoid holding lock during encode).
-            frame = std::move(m_latest_frame.latest.value());
+            packet = std::move(m_latest_frame.latest.value());
             // Keep the slot populated with an empty placeholder so overwrite count remains meaningful.
             m_latest_frame.latest.reset();
         }
 
         //3.确认编码管线存在
-        if (!frame.has_value() || !m_video_encode_pipeline) continue;
+        if (!packet.has_value() || !m_video_encode_pipeline) {
+            if (packet.has_value()) release_raw_frame_owned(packet->frame);
+            continue;
+        }
 
-		if (m_latest_encoded.q.size() > 3) continue;//如果编码队列里积压了过多样本，先不编码新帧了，等消费者把队列吃掉一些再说。这是为了防止编码过慢时���存占用持续增长。
-        CapturedFrame& cf = frame.value();
-        last_encoded_id = cf.frame_id;
+        { // backlog guard
+            std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
+            if (m_latest_encoded.q.size() > 3) {
+                release_raw_frame_owned(packet->frame);
+                continue;
+            }
+        }
+        CapturedRawFrameWithTelemetry& pkt = packet.value();
+        rpc_video_contract::RawFrame& rf = pkt.frame;
+        last_encoded_id = rf.frame_id;
 
-        int target_w = cf.grab_outcome.width;
-        int target_h = cf.grab_outcome.height;
+        const int captured_w = rf.coded_size.w;
+        const int captured_h = rf.coded_size.h;
+        int target_w = captured_w;
+        int target_h = captured_h;
         bool applied_layout = false;
         //4.确保编码器布局/分辨率策略一致
-        const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout( cf.grab_outcome.width, cf.grab_outcome.height, m_had_successful_video.load(std::memory_order_relaxed), target_w, target_h, applied_layout);
-        if (!layout_ok) continue;
+        const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout(captured_w, captured_h, m_had_successful_video.load(std::memory_order_relaxed), target_w, target_h, applied_layout);
+        if (!layout_ok) {
+            release_raw_frame_owned(rf);
+            continue;
+        }
 
         //5.编码
-        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(cf.grab_outcome.frame, cf.grab_outcome.width, cf.grab_outcome.height, applied_layout);
+        auto* vec = static_cast<std::vector<uint8_t>*>(rf.owned.opaque);
+        if (!vec) {
+            release_raw_frame_owned(rf);
+            continue;
+        }
+        VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(*vec, captured_w, captured_h, applied_layout);
 
         if (enc.encode_ok && !enc.sample.empty() && !enc.invalid_payload) {
-            EncodedSample es;
-            es.frame_id = cf.frame_id;
-            es.cap_unix_ms = cf.unix_ms;
-            es.prep_unix_ms = cf.prep_unix_ms;
-            es.unix_ms = enc.frame_unix_ms ? enc.frame_unix_ms : cf.unix_ms;
-            es.sample = std::move(enc.sample);
-            es.used_hw_capture = cf.grab_outcome.used_hw_capture;
-            es.w = target_w;
-            es.h = target_h;
+            EncodedFrameWithTelemetry out;
+            out.payload_storage = std::move(enc.sample);
+
+            out.telem = pkt.telem;
+            out.telem.capture_size = rpc_video_contract::VideoSize{ target_w, target_h };
+            out.telem.encode_unix_ms = enc.frame_unix_ms ? enc.frame_unix_ms : rpc_unix_epoch_ms();
 
             {
                 //5.1 推入最新编码队列
                 std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
-                m_latest_encoded.q.push_back(es);
+                m_latest_encoded.q.push_back(std::move(out));
             }
 
-            {
-                //更新编码遥测快照
-                std::lock_guard<std::mutex> lk(m_last_enc_mtx);
-                m_last_capture_unix_ms = es.cap_unix_ms;
-                m_last_prep_unix_ms = es.prep_unix_ms;
-                m_last_frame_unix_ms = es.unix_ms;
-                m_last_capture_w = es.w;
-                m_last_capture_h = es.h;
-            }
-
-            // Update last good sample for steady-hold mode.
-            {
-                //更新 steady-hold 所需的“最后一份好样本”
-                std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);
-                m_last_good_video_sample = es.sample;
-            }
-            m_have_last_good_sample.store(true, std::memory_order_relaxed);
             m_had_successful_video.store(true, std::memory_order_relaxed);
         } else {
             // If encode fails but we already have a good sample, request keyframe to recover quickly.
-            if (m_have_last_good_sample.load(std::memory_order_relaxed))  request_force_keyframe();
+            request_force_keyframe();
         }
+
+        // RawFrame owns heap buffer; always release after encoding attempt.
+        release_raw_frame_owned(rf);
     }
 }
 
 //MediaSession 调度线程，样本消费者,每个视频 tick 来“取一次样本”，把样本交给 sender（外部调用它的人会把 out_sample 传给 m_sender->on_video_sample(...)）。
-void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, remote_capture_telemetry& out_telemetry)
+void remote_video_engine::produce_next_video_sample(rtc::binary& out_sample, rpc_video_contract::TelemetrySnapshot& out_telem)
 {
     out_sample.clear();
-    out_telemetry = remote_capture_telemetry{};
+    out_telem = rpc_video_contract::TelemetrySnapshot{};
 
-    //1.写入基础遥测
-    const uint64_t now_unix_ms = rpc_unix_epoch_ms();
-    out_telemetry.last_frame_unix_ms = now_unix_ms;
-    out_telemetry.last_capture_used_hw = m_last_capture_used_hw;
-
-    //2.无阻塞地“取走最新编码样本”Pop latest encoded sample (no blocking). If none, apply steady-hold fallback policy.
-    EncodedSample es;
+    //1.无阻塞地“取走最新编码样本”Pop latest encoded sample (no blocking). If none, apply steady-hold fallback policy.
+    EncodedFrameWithTelemetry es;
     bool have = false;
     {
         std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
         if (!m_latest_encoded.q.empty()) {
             es = std::move(m_latest_encoded.q.front());
 			m_latest_encoded.q.pop_front();
-
-            //es = std::move(m_latest_encoded.q.back());
-            //m_latest_encoded.q.clear();
             have = true;
         }
     }
 
-    //3.若拿到了有效样本：填充输出并返回
-    if (have && !es.sample.empty()) {
-        out_sample = std::move(es.sample);
-        //把编码线程产出的遥测写到
-        out_telemetry.last_capture_unix_ms = es.cap_unix_ms;
-        out_telemetry.last_encode_unix_ms = es.unix_ms;
-        out_telemetry.last_prep_unix_ms = es.prep_unix_ms;
-        out_telemetry.last_frame_unix_ms = es.unix_ms ? es.unix_ms : now_unix_ms;
-        out_telemetry.capture_width = es.w;
-        out_telemetry.capture_height = es.h;
-
+    //2.若拿到了有效样本：填充输出并返回
+    if (have && !es.payload_storage.empty()) {
+        out_sample = std::move(es.payload_storage);
+        out_telem = es.telem;
         return;
-    }
-
-    // 否则：走“稳帧兜底（steady-hold）”并用上一次遥测,No fresh sample; reuse last good sample if configured.
-    apply_emit_fail_policy(out_sample, false);
-    {
-        //加锁 m_last_enc_mtx，用上一次成功编码的快照填 out_telemetry：
-        std::lock_guard<std::mutex> lk(m_last_enc_mtx);
-        out_telemetry.last_capture_unix_ms = m_last_capture_unix_ms;
-        out_telemetry.last_encode_unix_ms = m_last_frame_unix_ms;
-        out_telemetry.last_prep_unix_ms = m_last_prep_unix_ms;
-        out_telemetry.last_frame_unix_ms = m_last_frame_unix_ms ? m_last_frame_unix_ms : now_unix_ms;
-        out_telemetry.capture_width = m_last_capture_w;
-        out_telemetry.capture_height = m_last_capture_h;
     }
 }
 
@@ -551,18 +513,6 @@ void remote_video_engine::reset_for_session_start()
     m_last_launch_placement_hwnd = nullptr;
 
     m_had_successful_video.store(false, std::memory_order_relaxed);
-    m_last_capture_unix_ms = 0;
-    m_last_prep_unix_ms = 0;
-    m_last_frame_unix_ms = 0;
-    {
-        std::lock_guard<std::mutex> lk(m_last_good_sample_mtx);
-        m_last_good_video_sample.clear();
-    }
-    m_have_last_good_sample.store(false, std::memory_order_relaxed);
-
-    m_last_good_rgb_frame.clear();
-    m_last_good_rgb_w = 0;
-    m_last_good_rgb_h = 0;
 
     m_window_missing_since_unix_ms = 0;
 
