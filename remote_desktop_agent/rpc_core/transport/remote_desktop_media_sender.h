@@ -32,10 +32,7 @@ public:
 
 private:
     void maybe_stop_if_no_clients(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients);
-    void send_video_control_messages(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients,
-                                       uint64_t video_sample_time_us,
-                                       const rtc::binary& video_sample,
-                                       const rpc_video_contract::TelemetrySnapshot& telemetry);
+    void send_video_control_messages(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients, uint64_t video_sample_time_us, const rtc::binary& video_sample, const rpc_video_contract::TelemetrySnapshot& telemetry);
 
     void send_media_frames(bool is_video,
                             const rtc::binary& sample,
@@ -50,7 +47,6 @@ private:
     uint64_t m_capture_health_interval = 0;
 
     std::chrono::steady_clock::time_point m_last_log;
-    uint64_t m_video_frame_index = 0;
     int m_last_video_w = 0;
     int m_last_video_h = 0;
 

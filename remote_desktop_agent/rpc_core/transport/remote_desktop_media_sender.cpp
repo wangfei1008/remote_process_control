@@ -156,38 +156,24 @@ void remote_desktop_media_sender::maybe_stop_if_no_clients(const std::vector<std
     m_stop_if_no_clients();
 }
 
-void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
-                                                   const rtc::binary& video_sample,
-                                                   const rpc_video_contract::TelemetrySnapshot& telemetry)
+void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us, const rtc::binary& video_sample, const rpc_video_contract::TelemetrySnapshot& telemetry)
 {
     const auto clients = m_snapshot_clients ? m_snapshot_clients() : std::vector<std::shared_ptr<ClientPeerConnection>>{};
 
-    const auto t_ctrl0 = std::chrono::steady_clock::now();
     // 1) 视频遥测/控制信令
     send_video_control_messages(clients, video_sample_time_us, video_sample, telemetry);
-    const auto t_ctrl1 = std::chrono::steady_clock::now();
 
     rtc::binary sampleToSend = video_sample;
     if (!video_sample.empty()) {
-        const uint64_t frameId = m_video_frame_index;
-        const uint64_t sendMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-
-        uint64_t capMs = static_cast<uint64_t>(telemetry.capture_unix_ms);
-        uint64_t encMs = static_cast<uint64_t>(telemetry.encode_unix_ms)
-            ? static_cast<uint64_t>(telemetry.encode_unix_ms)
-            : static_cast<uint64_t>(telemetry.frame_unix_ms);
-        if (capMs == 0) capMs = static_cast<uint64_t>(telemetry.frame_unix_ms);
-        if (encMs == 0) encMs = static_cast<uint64_t>(telemetry.frame_unix_ms);
-        if (capMs == 0) capMs = sendMs;
-        if (encMs == 0) encMs = sendMs;
-        uint64_t prepMs = static_cast<uint64_t>(telemetry.prep_unix_ms);
-        if (prepMs == 0) prepMs = capMs;
+        const uint64_t sendMs = rpc_unix_epoch_ms();
+        uint64_t capMs = telemetry.capture_unix_ms;
+        uint64_t encMs = telemetry.encode_unix_ms;
+        uint64_t prepMs = telemetry.prep_unix_ms;
 
         const bool isAnnexB = LooksLikeAnnexB(video_sample);
         const rtc::binary sei = isAnnexB
-            ? BuildRpcLatencySeiNaluAnnexB(frameId, capMs, encMs, sendMs, prepMs)
-            : BuildRpcLatencySeiNaluAvcc(frameId, capMs, encMs, sendMs, prepMs);
+            ? BuildRpcLatencySeiNaluAnnexB(telemetry.frame_id, capMs, encMs, sendMs, prepMs)
+            : BuildRpcLatencySeiNaluAvcc(telemetry.frame_id, capMs, encMs, sendMs, prepMs);
         sampleToSend = rtc::binary{};
         sampleToSend.reserve(sei.size() + video_sample.size());
         sampleToSend.insert(sampleToSend.end(), sei.begin(), sei.end());
@@ -196,18 +182,6 @@ void remote_desktop_media_sender::on_video_sample(uint64_t video_sample_time_us,
 
     // 2) RTP 视频帧
     send_media_frames(true, sampleToSend, video_sample_time_us, clients);
-    const auto t_send1 = std::chrono::steady_clock::now();
-
-    if (!video_sample.empty()) {
-        static std::chrono::steady_clock::time_point s_last_split_log{};
-        if (t_send1 - s_last_split_log >= std::chrono::seconds(1)) {
-            s_last_split_log = t_send1;
-            const auto dc_us = std::chrono::duration_cast<std::chrono::microseconds>(t_ctrl1 - t_ctrl0).count();
-            const auto rtp_us = std::chrono::duration_cast<std::chrono::microseconds>(t_send1 - t_ctrl1).count();
-            std::cout << "[latency][agent_send] dc_json_ctrl_us=" << dc_us << " rtp_send_us=" << rtp_us
-                      << " bytes=" << video_sample.size() << " bytes_sent=" << sampleToSend.size() << std::endl;
-        }
-    }
 
     // 3) stop_if_no_clients（仅当无客户端持续超过宽限）
     maybe_stop_if_no_clients(clients);
@@ -223,11 +197,7 @@ void remote_desktop_media_sender::on_audio_sample(uint64_t audio_sample_time_us,
     maybe_stop_if_no_clients(clients);
 }
 
-void remote_desktop_media_sender::send_video_control_messages(
-    const std::vector<std::shared_ptr<ClientPeerConnection>>& clients,
-    uint64_t video_sample_time_us,
-    const rtc::binary& video_sample,
-    const rpc_video_contract::TelemetrySnapshot& telemetry)
+void remote_desktop_media_sender::send_video_control_messages(const std::vector<std::shared_ptr<ClientPeerConnection>>& clients, uint64_t video_sample_time_us, const rtc::binary& video_sample, const rpc_video_contract::TelemetrySnapshot& telemetry)
 {
     // 分辨率变化：依赖 telemetry（阶段性先用 0/真实由后续 engine 填充）
     const int curW = telemetry.capture_size.w;
@@ -264,10 +234,7 @@ void remote_desktop_media_sender::send_video_control_messages(
     // Only emit captureHealth when we have a real video frame.
     if (video_sample.empty()) return;
 
-    // frameId used by per-frame SEI injection is based on this counter.
-    m_video_frame_index++;
-
-    if ((m_video_frame_index % m_capture_health_interval) == 0) {
+    if ((telemetry.frame_id % m_capture_health_interval) == 0) {
         const nlohmann::json health = {
             { "type", "captureHealth" },
             { "backend", telemetry.backend == rpc_video_contract::CaptureBackend::Dxgi ? "dxgi" : "gdi" },

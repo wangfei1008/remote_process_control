@@ -84,6 +84,10 @@ void remote_desktop_media_session::start_media_session()
     if (!m_impl) return;
     if (m_impl->m_loop_running.load(std::memory_order_relaxed)) return;
 
+    // 线程模型概览：
+    // - remote_video_engine 内部会再启动自己的采集/编码/退出监控线程（见 remote_video_engine::start）
+    // - 本类再起一个 “发送调度线程” m_loop_thread：以单一时间轴把音频(20ms)与视频(~33ms)节奏化产出并交给 sender
+    // - stop_media_session() 通过原子标志让循环尽快退出，并在锁外 join，保证析构安全且避免死锁
     m_impl->m_video_engine->start();
     m_impl->m_audio_generator->start();
 
@@ -93,55 +97,51 @@ void remote_desktop_media_session::start_media_session()
     m_impl->m_next_video_time_us = 0;
     m_impl->m_next_audio_time_us = 0;
 
+    // 只用作“是否退出循环”的轻量信号，不承担跨线程发布复杂对象的职责，因此 memory_order_relaxed 足够。
     m_impl->m_loop_running = true;
 
+    // 注意：线程 lambda 捕获 this。
+    // - 由于析构会调用 stop_media_session() 并 join 该线程，因此 this 在 join 完成前必须保持存活。
+    // - 循环里同时检查 m_impl 指针与 m_loop_running：前者防止实现体被释放后继续访问，后者用于正常停止路径。
     m_impl->m_loop_thread = std::thread([this]() {
         while (m_impl && m_impl->m_loop_running.load(std::memory_order_relaxed)) {
+            // 选择下一次要“到点”的媒体类型（音频 or 视频），用同一个 start_time_us 做基准。
+            // 这相当于一个非常简化的 pacing：谁的 next_time 更早就先产出谁。
+            // 这里用“理想时间轴”(next_*) 而不是 “now+duration”：
+            // - 可抵抗 sleep 抖动：即使某次晚了，next_* 仍按固定步长推进，不会越拖越慢
+            // - 音视频在同一基准下比较，避免两个独立节拍器长期漂移
             const uint64_t next_time = (m_impl->m_next_video_time_us <= m_impl->m_next_audio_time_us)
                 ? m_impl->m_next_video_time_us
                 : m_impl->m_next_audio_time_us;
 
+            // elapsed：距 start_time_us 的相对时间（微秒）。next_time 也是相对时间。
             const uint64_t elapsed = current_time_in_microseconds() - m_impl->m_start_time_us;
             if (next_time > elapsed) {
+                // sleep_for 不是硬实时：系统调度/抢占可能造成抖动；这里的 next_* 会持续累加，
+                // 让长时间漂移不会无限扩大（下一轮仍以“理想时间轴”推进）。
                 std::this_thread::sleep_for(std::chrono::microseconds(next_time - elapsed));
             }
 
+            // 二次检查：睡眠期间 stop 可能发生；这里尽快退出，避免在停止后仍产出/发送一帧。
             if (!m_impl || !m_impl->m_loop_running.load(std::memory_order_relaxed)) break;
 
             if (m_impl->m_next_video_time_us <= m_impl->m_next_audio_time_us) {
                 rtc::binary video_sample;
                 rpc_video_contract::TelemetrySnapshot telemetry;
-
-                static std::uint64_t s_video_loop_tick = 0;
-                ++s_video_loop_tick;
-
-                const auto t_produce0 = std::chrono::steady_clock::now();
+                // produce：从 video_engine 拉取“下一帧编码后数据”（可能为空，例如窗口缺失/无有效帧）。
                 m_impl->m_video_engine->produce_next_video_sample(video_sample, telemetry);
-                const auto t_produce1 = std::chrono::steady_clock::now();
+
+                // sender 负责把 sample 分发给当前 peer(s)（内部会自行处理无客户端/背压等策略）。
                 m_impl->m_sender->on_video_sample(m_impl->m_next_video_time_us, video_sample, telemetry);
-                const auto t_after_send = std::chrono::steady_clock::now();
-
-                const auto produce_us = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(t_produce1 - t_produce0).count());
-                const auto send_us = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(t_after_send - t_produce1).count());
-
-                static std::chrono::steady_clock::time_point s_last_nonempty_log{};
-                if (!video_sample.empty()) {
-                    if (t_after_send - s_last_nonempty_log >= std::chrono::seconds(1) || s_video_loop_tick <= 5) {
-                        s_last_nonempty_log = t_after_send;
-                        std::cout << "[latency][agent_pipe] tick=" << s_video_loop_tick
-                                  << " produce_us=" << produce_us << " send_path_us=" << send_us
-                                  << " bytes=" << video_sample.size() << std::endl;
-                    }
-                } else if (s_video_loop_tick <= 12) {
-                    std::cout << "[latency][agent_pipe] tick=" << s_video_loop_tick
-                              << " produce_us=" << produce_us << " send_path_us=" << send_us << " (empty)\n";
-                }
-
+  
+                // 推进理想视频时间轴：始终按固定帧间隔累加，不用“当前时刻”，从而避免抖动导致的节奏漂移。
                 m_impl->m_next_video_time_us += m_impl->m_video_frame_duration_us;
             } else {
                 rtc::binary audio_sample;
+                // 音频这里用静音发生器做占位：固定 20ms 产出一次（与 Opus 常见帧长一致）。
                 m_impl->m_audio_generator->produce_next_audio_sample(audio_sample);
                 m_impl->m_sender->on_audio_sample(m_impl->m_next_audio_time_us, audio_sample);
+                // 推进理想音频时间轴：同视频逻辑，保证 20ms 节拍稳定。
                 m_impl->m_next_audio_time_us += m_impl->m_audio_frame_duration_us;
             }
         }
@@ -158,9 +158,11 @@ void remote_desktop_media_session::stop_media_session()
         if (m_impl->m_loop_thread.joinable()) loop_to_join = std::move(m_impl->m_loop_thread);
     }
 
+    // join 放在锁外：避免线程退出过程中若间接触发回调/再入需要拿 m_mutex 时造成死锁。
     if (loop_to_join.joinable()) loop_to_join.join();
 
     try {
+        // 先停音频再停视频没有强依赖；这里保持与 start 顺序对称，保证资源尽快释放。
         if (m_impl && m_impl->m_audio_generator) m_impl->m_audio_generator->stop();
         if (m_impl && m_impl->m_video_engine) m_impl->m_video_engine->stop();
     } catch (...) {}
