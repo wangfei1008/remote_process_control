@@ -14,15 +14,12 @@
 
 namespace rpc_video_engine_impl {
 
-// “最新值槽位”：生产者覆盖写，消费者取走（overwrite 计数用于诊断）。
+// “最新值槽位”：生产者覆盖写，消费者取走。
 template <class T>
-struct LatestSlot {
+struct LatestRawFrame {
     std::mutex mtx;
     std::condition_variable cv;
     std::optional<T> latest;
-
-    uint64_t dropped_by_overwrite = 0;
-    uint64_t stored_items = 0;
 };
 
 // 有界队列：push 时溢出则 drop oldest（drop 计数用于诊断）。
@@ -30,10 +27,6 @@ template <class T>
 struct BoundedQueue {
     std::mutex mtx;
     std::deque<T> q;
-    size_t capacity = 1;
-
-    uint64_t dropped_by_overflow = 0;
-    uint64_t pushed = 0;
 };
 
 } // namespace rpc_video_engine_impl

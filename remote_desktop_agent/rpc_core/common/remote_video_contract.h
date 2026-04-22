@@ -8,8 +8,7 @@
 // - 显式：bitstream 格式、时间戳体系（媒体时间 vs 墙钟）、颜色语义、buffer 所有权
 // - 可扩展：struct_size + reserved + ext（向后兼容）
 // - 跨平台：不依赖平台头文件；GPU 句柄以抽象 handle 表达
-//
-// 注意：该文件当前不会替换 remote_video_types.h，也不会被其他文件引用。
+
 
 namespace rpc_video_contract {
 

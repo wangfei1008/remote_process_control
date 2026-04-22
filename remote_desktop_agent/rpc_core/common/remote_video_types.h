@@ -33,8 +33,6 @@ struct LatestFrameSlot {
     std::mutex mtx;
     std::condition_variable cv;
     std::optional<CapturedFrame> latest;
-    uint64_t dropped_by_overwrite = 0;
-    uint64_t stored_frames = 0;
 };
 
 struct EncodedSample {
@@ -58,9 +56,6 @@ struct EncodedSample {
 struct LatestEncodedQueue {
     std::mutex mtx;
     std::deque<EncodedSample> q;
-    size_t capacity = 1;
-    uint64_t dropped_by_overflow = 0;
-    uint64_t pushed = 0;
 };
 
 // 视频采集/编码遥测快照（用于 frameMark / captureHealth）。

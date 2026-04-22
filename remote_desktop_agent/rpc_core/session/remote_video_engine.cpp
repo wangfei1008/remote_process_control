@@ -88,8 +88,6 @@ remote_video_engine::remote_video_engine(const std::string& exe_path, std::funct
             m_capture_source->init();
         }
     }
-
-    m_latest_encoded.capacity = (size_t)(std::max)(1, runtime_config::get_int("RPC_SEND_QUEUE_DEPTH", 1));
 }
 
 bool remote_video_engine::is_remote_process_still_running() const
@@ -380,11 +378,7 @@ void remote_video_engine::capture_loop()
 
                 {
                     std::lock_guard<std::mutex> lk(m_latest_frame.mtx);
-                    if (m_latest_frame.latest.has_value()) {
-                        m_latest_frame.dropped_by_overwrite++;
-                    }
                     m_latest_frame.latest = std::move(cf);
-                    m_latest_frame.stored_frames++;
                 }
                 m_latest_frame.cv.notify_one();
             }
@@ -456,12 +450,7 @@ void remote_video_engine::encode_loop()
             {
                 //5.1 推入最新编码队列
                 std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
-                while (m_latest_encoded.q.size() >= m_latest_encoded.capacity) {
-                    m_latest_encoded.q.pop_front();
-                    m_latest_encoded.dropped_by_overflow++;
-                }
                 m_latest_encoded.q.push_back(es);
-                m_latest_encoded.pushed++;
             }
 
             {
