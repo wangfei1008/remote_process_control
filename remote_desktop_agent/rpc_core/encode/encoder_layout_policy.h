@@ -2,9 +2,8 @@
 
 class EncoderLayoutPolicy {
 public:
-    void configure(int change_threshold_px, int required_streak);
     void reset();
-    bool should_apply_layout_change(int captured_w, int captured_h, int current_w, int current_h, bool had_successful_video);
+    bool should_apply_layout_change(int captured_w, int captured_h, int current_w, int current_h);
 
 private:
     int m_layout_change_threshold_px = 8;

@@ -112,11 +112,11 @@ bool SessionHealthPolicy::is_window_viable_for_capture(HWND hwnd)
     const int score = score_window_for_capture(hwnd, 0, false);
     return score > 0;
 }
-bool SessionHealthPolicy::should_notify_remote_exit(bool had_successful_video, uint64_t now_ms, uint64_t& io_window_missing_since_unix_ms, uint32_t window_missing_exit_grace_ms)
+bool SessionHealthPolicy::should_notify_remote_exit(uint64_t now_ms, uint64_t& io_window_missing_since_unix_ms, uint32_t window_missing_exit_grace_ms)
 {
     if (io_window_missing_since_unix_ms == 0)  io_window_missing_since_unix_ms = now_ms;
 
-    if (!had_successful_video || now_ms < io_window_missing_since_unix_ms) return false;
+    if (now_ms < io_window_missing_since_unix_ms) return false;
 
     return (now_ms - io_window_missing_since_unix_ms) >= static_cast<uint64_t>(window_missing_exit_grace_ms);
 }

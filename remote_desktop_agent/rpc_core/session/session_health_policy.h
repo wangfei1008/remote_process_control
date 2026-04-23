@@ -19,8 +19,7 @@ public:
 
     // 判断是否应上报“远端已退出”：
     // 仅在曾成功出视频后，且窗口缺失持续超过 grace 窗口时才返回 true。
-    static bool should_notify_remote_exit(bool had_successful_video,
-                                          uint64_t now_ms,
+    static bool should_notify_remote_exit(uint64_t now_ms,
                                           uint64_t& io_window_missing_since_unix_ms,
                                           uint32_t window_missing_exit_grace_ms);
 

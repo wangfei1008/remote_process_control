@@ -11,10 +11,9 @@ VideoEncodePipeline::~VideoEncodePipeline()
     destroy_encoder();
 }
 
-void VideoEncodePipeline::configure(int fps, int layout_change_threshold_px, int layout_change_required_streak)
+void VideoEncodePipeline::configure(int fps)
 {
     m_encode_fps = (std::max)(1, fps);
-    m_encoder_layout_policy.configure(layout_change_threshold_px, layout_change_required_streak);
 }
 
 bool VideoEncodePipeline::initialize_encoder(int width, int height)
@@ -53,7 +52,7 @@ void VideoEncodePipeline::request_force_keyframe_with_cooldown(uint64_t now_ms)
     }
 }
 
-bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h, bool had_successful_video,
+bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h,
                                                 int& io_target_w, int& io_target_h, bool& applied_layout_out)
 {
     applied_layout_out = false;
@@ -67,7 +66,7 @@ bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h, 
     const int encoder_w = m_av_codec_ctx->width;
     const int encoder_h = m_av_codec_ctx->height;
 
-    if (!m_encoder_layout_policy.should_apply_layout_change(captured_w, captured_h, encoder_w, encoder_h, had_successful_video)) {
+    if (!m_encoder_layout_policy.should_apply_layout_change(captured_w, captured_h, encoder_w, encoder_h)) {
         io_target_w = encoder_w;
         io_target_h = encoder_h;
 
@@ -75,7 +74,7 @@ bool VideoEncodePipeline::ensure_encoder_layout(int captured_w, int captured_h, 
     }
 
     std::cout << "[encode] keep encoder layout " << encoder_w << "x" << encoder_h << " (captured "
-                << captured_w << "x" << captured_h << ", successful_video=" << had_successful_video << ")\n";
+                << captured_w << "x" << captured_h << ")\n";
 
     io_target_w = captured_w;
     io_target_h = captured_h;

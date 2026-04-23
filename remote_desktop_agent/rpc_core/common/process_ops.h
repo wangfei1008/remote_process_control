@@ -165,10 +165,7 @@ public:
     void detach_launch_process_info(PROCESS_INFORMATION& out_process_info);
 
     /// 终止并关闭已由 detach 交给调用方的 launch 句柄；若 capture_pid 与 launch 不同则按 PID 终止 capture。
-    void terminate_detached_launch(PROCESS_INFORMATION& process_info,
-                                   DWORD capture_pid,
-                                   DWORD launch_pid,
-                                   UINT exit_code = 0) const;
+    void terminate_detached_launch(PROCESS_INFORMATION& process_info, DWORD capture_pid, DWORD launch_pid, UINT exit_code = 0) const;
 
     // === 进程查询/工具（无策略）===
     scoped_handle open_process(DWORD pid, DWORD access = PROCESS_QUERY_LIMITED_INFORMATION) const;
@@ -179,10 +176,12 @@ public:
     std::string get_process_basename_lower(DWORD pid) const;
 
     bool get_exit_code(HANDLE process_handle, DWORD& out_exit_code) const;
+	DWORD get_exit_code() const;
     bool is_running(DWORD pid) const;
 
     bool terminate_by_handle(HANDLE process_handle, UINT exit_code = 0) const;
     bool terminate_by_pid(DWORD pid, UINT exit_code = 0) const;
+    bool terminate() const;
 
     DWORD parent_pid_toolhelp(DWORD pid) const;
     bool is_same_or_descendant(DWORD pid, DWORD ancestor_pid, int max_depth = 64) const;
@@ -191,13 +190,13 @@ private:
     static std::string basename_from_path(const std::string& path);
 
 private:
-    std::string m_exe_path;
+	std::string m_exe_path;    
     DWORD m_creation_flags;
     bool m_show_maximized;
 
     process_info m_pi;
-    DWORD m_launch_pid = 0;
-    DWORD m_capture_pid = 0;
+	DWORD m_launch_pid = 0;// 可能会因为 capture 目标的 PID 漂移而被重绑到 launch 的子进程上（例如 Electron 子进程），但不会被重绑到无关进程上。
+	DWORD m_capture_pid = 0;// 可能会被外部重绑到 launch 的子进程上（例如 Electron 子进程），但不会被重绑到无关进程上。
     std::string m_target_exe_base_name_lower;
     bool m_stop_on_destruct = true;
 };

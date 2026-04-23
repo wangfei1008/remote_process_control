@@ -26,6 +26,6 @@ struct CaptureTargetResolveResult {
 
 class CaptureTargetResolver {
 public:
-    static CaptureTargetResolveResult resolve(process_ops& proc, DWORD launch_pid, DWORD& io_capture_pid, HWND current_main_hwnd, const std::string& target_exe_base_name_lower, bool had_successful_video, uint64_t pid_rebind_deadline_unix_ms);
+    static CaptureTargetResolveResult resolve(process_ops& proc, HWND current_main_hwnd);
 };
 

@@ -204,6 +204,14 @@ bool process_ops::get_exit_code(HANDLE process_handle, DWORD& out_exit_code) con
     return GetExitCodeProcess(process_handle, &out_exit_code) != FALSE;
 }
 
+DWORD process_ops::get_exit_code() const
+{
+    DWORD code = 0;
+    if (!m_pi.get().hProcess) return 0;
+    if (GetExitCodeProcess(m_pi.get().hProcess, &code) == FALSE) return 0;
+    return code ;
+}
+
 bool process_ops::is_running(DWORD pid) const
 {
     if (pid == 0) return false;
@@ -227,6 +235,23 @@ bool process_ops::terminate_by_pid(DWORD pid, UINT exit_code) const
     auto h = open_process(pid, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION);
     if (!h) return false;
     return terminate_by_handle(h.get(), exit_code);
+}
+
+bool process_ops::terminate() const
+{
+    DWORD exit_code = 0;
+    PROCESS_INFORMATION process_info = m_pi.get();
+    if (process_info.hProcess) {
+        terminate_by_handle(process_info.hProcess, exit_code);
+        CloseHandle(process_info.hProcess);
+    }
+    if (process_info.hThread) {
+        CloseHandle(process_info.hThread);
+    }
+    if (m_capture_pid != 0 && m_capture_pid != m_launch_pid) {
+        terminate_by_pid(m_capture_pid, exit_code);
+    }
+    return false;
 }
 
 DWORD process_ops::parent_pid_toolhelp(DWORD pid) const

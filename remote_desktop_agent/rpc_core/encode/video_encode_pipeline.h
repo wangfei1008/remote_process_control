@@ -21,13 +21,12 @@ struct VideoEncodeResult {
 class VideoEncodePipeline {
 public:
     ~VideoEncodePipeline();
-    void configure(int fps, int layout_change_threshold_px, int layout_change_required_streak);
+    void configure(int fps);
     bool initialize_encoder(int width, int height);
     void reset_for_stream_start();
     void request_force_keyframe_with_cooldown(uint64_t now_ms);
     bool ensure_encoder_layout(int captured_w,
                                int captured_h,
-                               bool had_successful_video,
                                int& io_target_w,
                                int& io_target_h,
                                bool& applied_layout_out);

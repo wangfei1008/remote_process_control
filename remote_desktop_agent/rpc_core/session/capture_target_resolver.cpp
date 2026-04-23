@@ -208,26 +208,32 @@ static HWND find_window_by_exe_hint(const process_ops& proc,
         });
 }
 
-static HWND try_recover_main_window(const process_ops& proc,
-                                    DWORD launch_pid,
-                                    DWORD& io_capture_pid,
-                                    const std::string& target_exe_base_name,
-                                    bool allow_pid_rebind_by_exename,
-                                    bool had_successful_video,
-                                    uint64_t pid_rebind_deadline_unix_ms)
+static HWND try_recover_main_window(const process_ops& proc, DWORD& io_capture_pid)
 {
-    HWND main_window = find_main_window_by_pid(io_capture_pid);
+    // 目标：在“当前 capture_pid 找不到主窗口/窗口失效”的情况下，尽量恢复一个可用的主窗口 HWND。
+    //
+    // 设计要点（为什么需要这个恢复逻辑）：
+    // - 某些进程启动后会发生 PID 漂移/重绑（例如：启动器进程拉起真正 UI 子进程；或应用重启渲染进程）。
+    // - 在会话刚启动的短时间窗口内，如果我们仍按旧 pid 枚举窗口，可能一直找不到 surfaces。
+    // - 因此允许在“尚未出过一次成功视频帧”时，基于 exe 名称在 launch_pid 的进程树内寻找更可信的 UI 窗口，
+    //   并把 io_capture_pid 重绑到该窗口真实 owner PID，从而恢复采集目标。
 
-    if (allow_pid_rebind_by_exename &&
-        !had_successful_video &&
-        !main_window &&
-        !target_exe_base_name.empty() &&
-        rpc_unix_epoch_ms() <= pid_rebind_deadline_unix_ms &&
-        launch_pid != 0 &&
-        proc.is_running(launch_pid)) {
+    // 1) 快路径：只要按 io_capture_pid 能找到主窗口，就不做任何更激进的重绑。
+    HWND main_window = find_main_window_by_pid(io_capture_pid);
+	std::string target_exe_base_name = proc.target_exe_base_name_lower();
+
+	DWORD launch_pid = proc.launch_pid();
+    if (!main_window && !target_exe_base_name.empty() && launch_pid != 0 && proc.is_running(launch_pid)) {
+        // 2) 恢复路径（严格受限）：
+        // - 只在尚未成功出画前启用：避免稳定运行后因为偶发窗口枚举抖动而把 pid 错绑到别的进程。
+        // - 只在 pid_rebind_deadline_unix_ms 前启用：把“允许重绑”的时窗限制在启动早期。
+        // - 只在 launch_pid 仍存活时启用：以 launch_pid 作为“进程树锚点”，避免误命中系统上同名窗口。
+
+        // 2.1 优先按 exe basename 精确匹配（例如 notepad.exe）。
         HWND hwnd = find_window_by_exe_basename(proc, target_exe_base_name, launch_pid);
         bool by_hint = false;
         if (!hwnd) {
+            // 2.2 次选：按 exe stem 在 window title/class 中做 hint 匹配（容错，风险也更高）。
             hwnd = find_window_by_exe_hint(proc, target_exe_base_name, launch_pid);
             by_hint = (hwnd != nullptr);
         }
@@ -235,6 +241,7 @@ static HWND try_recover_main_window(const process_ops& proc,
             window_ops wops;
             const DWORD real_pid = wops.get_window_pid(hwnd);
             if (real_pid) {
+                // 2.3 一旦找到候选窗口，就以窗口真实 owner PID 作为新的 capture_pid（这一步才真正“重绑”）。
                 if (real_pid != io_capture_pid) {
                     std::cout << "[proc] pid rebound by exe, old_pid=" << io_capture_pid
                               << " new_pid=" << real_pid
@@ -250,11 +257,6 @@ static HWND try_recover_main_window(const process_ops& proc,
         }
     }
     return main_window;
-}
-
-static bool should_log_resolve_diag()
-{
-    return runtime_config::get_bool("RPC_LOG_CAPTURE_RESOLVE", false);
 }
 
 struct WindowCandidateInfo {
@@ -317,17 +319,15 @@ static void sort_candidates_by_rank(std::vector<WindowCandidateInfo>& candidates
 
 static void log_resolve_diag(const process_ops& proc,
                              DWORD prev_capture_pid,
-                             DWORD launch_pid,
                              DWORD capture_pid,
                              HWND current_main_hwnd,
                              HWND recovered_hwnd,
-                             const std::string& target_exe_base_name_lower,
                              const char* why)
 {
-    if (!should_log_resolve_diag()) return;
-
+	std::string target_exe_base_name_lower = proc.target_exe_base_name_lower();
     const std::string target_name = to_lower_ascii(target_exe_base_name_lower);
     const std::string stem = exe_stem_lower(target_exe_base_name_lower);
+	DWORD launch_pid = proc.launch_pid();
 
     std::cout << "[capture][resolve] why=" << (why ? why : "")
               << " launch_pid=" << launch_pid
@@ -364,8 +364,9 @@ static void log_resolve_diag(const process_ops& proc,
 
 } // namespace
 
-CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWORD launch_pid, DWORD& io_capture_pid, HWND current_main_hwnd, const std::string& target_exe_base_name_lower, bool had_successful_video, uint64_t pid_rebind_deadline_unix_ms)
+CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, HWND current_main_hwnd)
 {
+	DWORD io_capture_pid = proc.capture_pid();
     CaptureTargetResolveResult r;
     r.previous_capture_pid = io_capture_pid;
     r.capture_pid = io_capture_pid;
@@ -379,6 +380,7 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWO
         r.main_hwnd_owner_pid = owner_pid;
         if (owner_pid != 0 && owner_pid != io_capture_pid) {
             io_capture_pid = owner_pid;
+			proc.set_capture_pid(io_capture_pid);
             r.capture_pid = owner_pid;
             r.capture_pid_rebound = true;
             r.why = "main_hwnd_owner_pid";
@@ -392,8 +394,7 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWO
             r.main_hwnd_selected_from_surfaces = true;
             r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
         }
-        log_resolve_diag(proc, r.previous_capture_pid, launch_pid, r.capture_pid, current_main_hwnd, nullptr,
-                         target_exe_base_name_lower, r.why);
+        log_resolve_diag(proc, r.previous_capture_pid, r.capture_pid, current_main_hwnd, nullptr, r.why);
         return r;
     }
 
@@ -406,24 +407,18 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWO
             r.main_hwnd_selected_from_surfaces = true;
             r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
             r.why = "surfaces_by_capture_pid";
-            log_resolve_diag(proc, r.previous_capture_pid, launch_pid, r.capture_pid, current_main_hwnd, nullptr,
-                             target_exe_base_name_lower, r.why);
+            log_resolve_diag(proc, r.previous_capture_pid,  r.capture_pid, current_main_hwnd, nullptr, r.why);
             return r;
         }
     }
 
     // 3) Recovery path: let policy attempt to find/rebind main window (by PID then exe-name within startup window).
     DWORD cap = io_capture_pid;
-    HWND recovered = try_recover_main_window(proc,
-                                             launch_pid,
-                                             cap,
-                                             target_exe_base_name_lower,
-                                             true,
-                                             had_successful_video,
-                                             pid_rebind_deadline_unix_ms);
+    HWND recovered = try_recover_main_window(proc, cap);
 
     if (cap != io_capture_pid) {
         io_capture_pid = cap;
+        proc.set_capture_pid(io_capture_pid);
         r.capture_pid_rebound = true;
         r.used_exe_rebind = true;
     }
@@ -436,6 +431,7 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWO
         if (owner_pid != 0 && owner_pid != io_capture_pid) {
             // Use the window's real owner PID for enumeration.
             io_capture_pid = owner_pid;
+            proc.set_capture_pid(io_capture_pid);
             r.capture_pid = owner_pid;
             r.capture_pid_rebound = true;
             r.why = "recovered_hwnd_owner_pid";
@@ -455,8 +451,7 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, DWO
         r.main_hwnd_selected_from_surfaces = true;
         r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
     }
-    log_resolve_diag(proc, r.previous_capture_pid, launch_pid, r.capture_pid, current_main_hwnd, recovered,
-                     target_exe_base_name_lower, r.why);
+    log_resolve_diag(proc, r.previous_capture_pid,  r.capture_pid, current_main_hwnd, recovered, r.why);
     return r;
 }
 

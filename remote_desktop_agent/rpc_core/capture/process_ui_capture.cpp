@@ -290,7 +290,6 @@ CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
 
 bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
                                                  const std::vector<window_ops::window_info>& surfaces,
-                                                 const ProcessUiCaptureOptions& options,
                                                  ICaptureSource& capture,
                                                  uint64_t now_unix_ms,
                                                  uint64_t prep_unix_ms,
@@ -298,6 +297,7 @@ bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
                                                  rpc_video_contract::RawFrame& out_frame,
                                                  rpc_video_contract::TelemetrySnapshot& out_telem)
 {
+    ProcessUiCaptureOptions options = load_layout_options_from_config();
     out_frame = rpc_video_contract::RawFrame{};
     out_telem = rpc_video_contract::TelemetrySnapshot{};
 

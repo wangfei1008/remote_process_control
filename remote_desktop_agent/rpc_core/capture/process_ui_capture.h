@@ -57,7 +57,6 @@ public:
     /// - out_telem timestamps are unix epoch ms
     static bool grab_process_ui_raw_frame(DWORD pid,
                                           const std::vector<window_ops::window_info>& surfaces,
-                                          const ProcessUiCaptureOptions& options,
                                           ICaptureSource& capture,
                                           uint64_t now_unix_ms,
                                           uint64_t prep_unix_ms,

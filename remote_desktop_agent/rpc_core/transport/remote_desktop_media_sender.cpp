@@ -4,6 +4,8 @@
 
 #include "nlohmann/json.hpp"
 
+#include "common/rpc_time.h"
+
 #include <array>
 #include <cstddef>
 #include <chrono>
