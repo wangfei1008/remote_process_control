@@ -17,9 +17,7 @@ public:
 
     void reset_session_recovery() override;
 
-    bool uses_hw_capture() const override { return true; }
-    const char* backend_name() const override { return "dxgi"; }
-
+    rpc_video_contract::CaptureBackend backend() const override { return rpc_video_contract::CaptureBackend::Dxgi; }
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

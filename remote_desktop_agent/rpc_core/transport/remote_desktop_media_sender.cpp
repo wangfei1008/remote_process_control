@@ -222,7 +222,8 @@ void remote_desktop_media_sender::send_video_control_messages(const std::vector<
 
     // 每秒一次 debug
     const auto now = std::chrono::steady_clock::now();
-    if (now - m_last_log > std::chrono::seconds(1)) {
+    //if (now - m_last_log > std::chrono::seconds(1)) {
+   if(telemetry.frame_id>0){
         m_last_log = now;
         std::cout << "[latency][sender] id =" << telemetry.frame_id
             << " size(" << telemetry.capture_size.w << "," << telemetry.capture_size.h << ")"

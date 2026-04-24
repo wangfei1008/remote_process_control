@@ -75,9 +75,6 @@
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_kind_resolver.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_source_factory.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
@@ -91,9 +88,6 @@
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\capture\process_ui_capture.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp">
@@ -150,8 +144,8 @@
     <ClCompile Include="rpc_core\common\character_conversion.cpp">
       <Filter>rpc_core\common</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\session\capture_target_resolver.cpp">
-      <Filter>rpc_core\session</Filter>
+    <ClCompile Include="rpc_core\capture\capture_target_resolver.cpp">
+      <Filter>rpc_core\capture</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -191,9 +185,6 @@
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_kind_resolver.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_source_factory.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
@@ -210,9 +201,6 @@
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\process_ui_tile.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_discard_policy.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h">
@@ -281,8 +269,8 @@
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\session\capture_target_resolver.h">
-      <Filter>rpc_core\session</Filter>
+    <ClInclude Include="rpc_core\capture\capture_target_resolver.h">
+      <Filter>rpc_core\capture</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

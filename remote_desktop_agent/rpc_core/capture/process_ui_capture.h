@@ -23,7 +23,6 @@ enum class ProcessUiCompositeLayout {
 struct CaptureGrabOutcome {
     bool ok = true;
     bool need_hold_on_empty_fallback = false;
-    bool used_hw_capture = false;
     int width = 0;
     int height = 0;
     int cap_min_left = 0;
@@ -46,8 +45,7 @@ public:
     static ProcessUiCaptureOptions load_layout_options_from_config();
 
     /// 枚举窗口 + 调用 ICaptureSource 采集瓦片 + 合成布局；不根据帧内容切换后端。
-    static CaptureGrabOutcome grab_process_ui_rgb(DWORD pid,
-                                                  const std::vector<window_ops::window_info>& surfaces,
+    static CaptureGrabOutcome grab_process_ui_rgb(const std::vector<window_ops::window_info>& surfaces,
                                                   const ProcessUiCaptureOptions& options,
                                                   ICaptureSource& capture,
                                                   uint64_t now_unix_ms);
@@ -55,8 +53,7 @@ public:
     /// Contract version: capture + compose into RawFrame (CPU/RGB24), plus telemetry snapshot.
     /// - prep_unix_ms: unix epoch ms immediately before grabbing tiles
     /// - out_telem timestamps are unix epoch ms
-    static bool grab_process_ui_raw_frame(DWORD pid,
-                                          const std::vector<window_ops::window_info>& surfaces,
+    static bool grab_process_ui_raw_frame(const std::vector<window_ops::window_info>& surfaces,
                                           ICaptureSource& capture,
                                           uint64_t now_unix_ms,
                                           uint64_t prep_unix_ms,

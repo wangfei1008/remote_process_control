@@ -15,6 +15,5 @@ public:
 
     void reset_session_recovery() override;
 
-    bool uses_hw_capture() const override { return false; }
-    const char* backend_name() const override { return "gdi"; }
+	rpc_video_contract::CaptureBackend backend() const override { return rpc_video_contract::CaptureBackend::Gdi; }
 };

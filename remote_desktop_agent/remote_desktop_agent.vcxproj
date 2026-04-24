@@ -16,8 +16,8 @@
     <ClCompile Include="app\rpc_remote_application.cpp" />
     <ClCompile Include="bootstrap\runtime_settings.cpp" />
     <ClCompile Include="input\input_controller.cpp" />
+    <ClCompile Include="rpc_core\capture\capture_target_resolver.cpp" />
     <ClCompile Include="rpc_core\common\character_conversion.cpp" />
-    <ClCompile Include="rpc_core\session\capture_target_resolver.cpp" />
     <ClCompile Include="signaling\signaling_transport.cpp" />
     <ClCompile Include="orchestration\active_desktop_session.cpp" />
     <ClCompile Include="orchestration\desktop_session_factory.cpp" />
@@ -27,13 +27,11 @@
     <!-- rpc_core：远程进程 / 采集 / 编码 / 传输（自包含副本，不引用 ..\rpc_remote_client） -->
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp" />
     <ClCompile Include="rpc_core\transport\client_peer_connection.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_kind_resolver.cpp" />
     <ClCompile Include="rpc_core\capture\capture_source_factory.cpp" />
     <ClCompile Include="rpc_core\capture\dxgi_process_ui_capture_backend.cpp" />
     <ClCompile Include="rpc_core\capture\gdi_process_ui_capture_backend.cpp" />
     <ClCompile Include="rpc_core\capture\i_capture_source.cpp" />
     <ClCompile Include="rpc_core\capture\process_ui_capture.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_discard_policy.cpp" />
     <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp" />
@@ -55,9 +53,9 @@
     <ClInclude Include="app\runtime_config.h" />
     <ClInclude Include="bootstrap\runtime_settings.h" />
     <ClInclude Include="input\input_controller.h" />
+    <ClInclude Include="rpc_core\capture\capture_target_resolver.h" />
     <ClInclude Include="rpc_core\common\character_conversion.h" />
     <ClInclude Include="rpc_core\common\remote_video_contract.h" />
-    <ClInclude Include="rpc_core\session\capture_target_resolver.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h" />
     <ClInclude Include="signaling\signaling_event.h" />
     <ClInclude Include="signaling\signaling_observer.h" />
@@ -69,14 +67,12 @@
     <ClInclude Include="media\media_pipeline.h" />
     <ClInclude Include="webrtc\operator_channel.h" />
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h" />
-    <ClInclude Include="rpc_core\capture\capture_kind_resolver.h" />
     <ClInclude Include="rpc_core\capture\capture_source_factory.h" />
     <ClInclude Include="rpc_core\capture\dxgi_process_ui_capture_backend.h" />
     <ClInclude Include="rpc_core\capture\gdi_process_ui_capture_backend.h" />
     <ClInclude Include="rpc_core\capture\i_capture_source.h" />
     <ClInclude Include="rpc_core\capture\process_ui_tile.h" />
     <ClInclude Include="rpc_core\capture\process_ui_capture.h" />
-    <ClInclude Include="rpc_core\capture\capture_discard_policy.h" />
     <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
     <ClInclude Include="rpc_core\common\process_ops.h" />
     <ClInclude Include="rpc_core\common\rpc_time.h" />

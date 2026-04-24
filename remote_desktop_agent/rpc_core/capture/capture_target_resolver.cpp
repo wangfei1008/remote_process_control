@@ -1,4 +1,4 @@
-#include "session/capture_target_resolver.h"
+#include "capture/capture_target_resolver.h"
 
 #include "app/runtime_config.h"
 #include "common/process_ops.h"
@@ -259,108 +259,7 @@ static HWND try_recover_main_window(const process_ops& proc, DWORD& io_capture_p
     return main_window;
 }
 
-struct WindowCandidateInfo {
-    HWND hwnd = nullptr;
-    DWORD pid = 0;
-    int score = -1000000;
-    int area = 0;
-    std::string title;
-    std::string cls;
-    std::string base;
-    bool stem_hit = false;
-};
 
-static void collect_rebind_candidates(DWORD capture_pid,
-                                      const std::string& target_name,
-                                      const std::string& stem,
-                                      const std::function<std::string(DWORD)>& get_process_basename,
-                                      std::vector<WindowCandidateInfo>& out_candidates)
-{
-    window_ops wops;
-    wops.enumerate_top_level_windows([&](HWND hwnd) -> bool {
-        RECT rect{};
-        if (!wops.get_window_rect(hwnd, rect)) return true;
-        const int width = rect.right - rect.left;
-        const int height = rect.bottom - rect.top;
-        if (width <= 0 || height <= 0) return true;
-
-        const DWORD pid = wops.get_window_pid(hwnd);
-        if (!pid) return true;
-
-        const std::string base = get_process_basename(pid);
-        const std::string title = get_window_text_lower(hwnd);
-        const std::string cls = get_window_class_lower(hwnd);
-        const bool stem_hit = (!stem.empty() && (title.find(stem) != std::string::npos || cls.find(stem) != std::string::npos));
-        const bool pid_hit = (pid == capture_pid);
-        const bool base_hit = (!target_name.empty() && base == target_name);
-        if (!pid_hit && !base_hit && !stem_hit) return true;
-
-        WindowCandidateInfo candidate;
-        candidate.hwnd = hwnd;
-        candidate.pid = pid;
-        candidate.score = score_window_for_capture(hwnd, 0, false);
-        candidate.area = width * height;
-        candidate.title = title;
-        candidate.cls = cls;
-        candidate.base = base;
-        candidate.stem_hit = stem_hit;
-        out_candidates.push_back(std::move(candidate));
-        return true;
-    });
-}
-
-static void sort_candidates_by_rank(std::vector<WindowCandidateInfo>& candidates)
-{
-    std::sort(candidates.begin(), candidates.end(), [](const WindowCandidateInfo& a, const WindowCandidateInfo& b) {
-        if (a.score != b.score) return a.score > b.score;
-        return a.area > b.area;
-    });
-}
-
-static void log_resolve_diag(const process_ops& proc,
-                             DWORD prev_capture_pid,
-                             DWORD capture_pid,
-                             HWND current_main_hwnd,
-                             HWND recovered_hwnd,
-                             const char* why)
-{
-	std::string target_exe_base_name_lower = proc.target_exe_base_name_lower();
-    const std::string target_name = to_lower_ascii(target_exe_base_name_lower);
-    const std::string stem = exe_stem_lower(target_exe_base_name_lower);
-	DWORD launch_pid = proc.launch_pid();
-
-    std::cout << "[capture][resolve] why=" << (why ? why : "")
-              << " launch_pid=" << launch_pid
-              << " prev_capture_pid=" << prev_capture_pid
-              << " capture_pid=" << capture_pid
-              << " current_main_hwnd=" << reinterpret_cast<void*>(current_main_hwnd)
-              << " recovered_hwnd=" << reinterpret_cast<void*>(recovered_hwnd)
-              << " target_exe=" << target_name
-              << std::endl;
-
-    std::vector<WindowCandidateInfo> candidates;
-    collect_rebind_candidates(prev_capture_pid, target_name, stem,
-                              [&proc](DWORD pid) { return proc.get_process_basename_lower(pid); },
-                              candidates);
-    sort_candidates_by_rank(candidates);
-
-    const size_t limit = (std::min)(static_cast<size_t>(6), candidates.size());
-    std::cout << "[capture][resolve] candidates=" << candidates.size() << " top=" << limit << std::endl;
-    for (size_t i = 0; i < limit; ++i) {
-        const auto& c = candidates[i];
-        std::ostringstream oss;
-        oss << "[capture][resolve] #" << i
-            << " hwnd=" << reinterpret_cast<void*>(c.hwnd)
-            << " pid=" << c.pid
-            << " base=" << c.base
-            << " score=" << c.score
-            << " area=" << c.area
-            << " stem_hit=" << (c.stem_hit ? 1 : 0)
-            << " title=\"" << c.title << "\""
-            << " class=\"" << c.cls << "\"";
-        std::cout << oss.str() << std::endl;
-    }
-}
 
 } // namespace
 
@@ -394,7 +293,6 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, HWN
             r.main_hwnd_selected_from_surfaces = true;
             r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
         }
-        log_resolve_diag(proc, r.previous_capture_pid, r.capture_pid, current_main_hwnd, nullptr, r.why);
         return r;
     }
 
@@ -407,7 +305,6 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, HWN
             r.main_hwnd_selected_from_surfaces = true;
             r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
             r.why = "surfaces_by_capture_pid";
-            log_resolve_diag(proc, r.previous_capture_pid,  r.capture_pid, current_main_hwnd, nullptr, r.why);
             return r;
         }
     }
@@ -451,7 +348,6 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, HWN
         r.main_hwnd_selected_from_surfaces = true;
         r.main_hwnd_owner_pid = wops.get_window_pid(r.main_hwnd);
     }
-    log_resolve_diag(proc, r.previous_capture_pid,  r.capture_pid, current_main_hwnd, recovered, r.why);
     return r;
 }
 

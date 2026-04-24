@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <iostream>
 
 struct DxgiProcessUiCaptureBackend::Impl {
     Impl();
@@ -387,12 +388,13 @@ DxgiProcessUiCaptureBackend::DxgiProcessUiCaptureBackend()
 
 DxgiProcessUiCaptureBackend::~DxgiProcessUiCaptureBackend() = default;
 
-bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::window_info>& surfaces,
-                                                std::vector<ProcessUiWindowTile>& tiles,
-                                                uint64_t /*now_unix_ms*/)
+bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::window_info>& surfaces, std::vector<ProcessUiWindowTile>& tiles, uint64_t /*now_unix_ms*/)
 {
     tiles.clear();
-    if (!m_impl || !m_impl->is_available() || surfaces.empty()) return false;
+    if (!m_impl || !m_impl->is_available() || surfaces.empty()) {
+		std::cout << "[dxgi capture] unavailable or no surfaces\n";
+        return false;
+    }        
 
     std::vector<HWND> hwnds;
     hwnds.reserve(surfaces.size());
@@ -406,6 +408,7 @@ bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::wi
             m_impl->note_acquisition_failure(should_reset);
         }
         if (should_reset) m_impl->reset();
+		std::cout << "[dxgi capture] begin_multiwindow_desktop_capture failed; timed_out=" << m_impl->last_acquire_timed_out() << "\n";
         return false;
     }
 
@@ -421,6 +424,12 @@ bool DxgiProcessUiCaptureBackend::capture_tiles(const std::vector<window_ops::wi
             bool should_reset = false;
             m_impl->note_acquisition_failure(should_reset);
             if (should_reset) m_impl->reset();
+            std::cout << "[dxgi capture] copy_acquired_window_to_rgb failed for hwnd=" << static_cast<void*>(s.hwnd)
+                      << " expected_rgb_size=" << expected
+                      << " got_rgb_size=" << t.rgb.size()
+                      << " w=" << t.w
+                      << " h=" << t.h
+				<< "\n";
             return false;
         }
         tiles.push_back(std::move(t));

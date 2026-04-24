@@ -11,7 +11,6 @@
 #include "rtc/rtc.hpp"
 
 #include "capture/bmp_dump_writer.h"
-#include "capture/capture_kind_resolver.h"
 #include "capture/i_capture_source.h"
 #include "capture/process_ui_capture.h"
 #include "common/process_ops.h"
@@ -60,25 +59,22 @@ private:
     std::function<void()> m_on_remote_process_exit;
     window_missing_fn m_on_window_missing;
 
-    std::atomic<bool> m_running{false};
+    
     std::atomic<bool> m_exit_notified{false};
 
     HWND m_main_window = nullptr;
 
-    std::thread m_exit_watch_thread;
-    std::thread m_capture_thread;
-    std::thread m_encode_thread;
-
+    std::atomic<bool> m_running{false};
+    std::thread m_exit_watch_thread; 
     std::atomic<bool> m_threads_running{false};
+    std::thread m_capture_thread;
+    std::thread m_encode_thread; 
 
     rpc_video_engine_impl::LatestRawFrame<CapturedRawFrameWithTelemetry> m_latest_frame;
     rpc_video_engine_impl::BoundedQueue<EncodedFrameWithTelemetry> m_latest_encoded;
 
 	std::unique_ptr<process_ops> m_process_ops;
 
-    ProcessUiCaptureOptions m_ui_capture_options;
-
-    /// 与 m_capture_kind 对应的唯一采集实现（阶段 B：ICaptureSource）。
     std::unique_ptr<ICaptureSource> m_capture_source;
 
     int m_video_fps = 30;

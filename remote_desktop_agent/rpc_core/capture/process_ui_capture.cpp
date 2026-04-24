@@ -225,10 +225,7 @@ CaptureGrabOutcome compose_linear(const std::vector<ProcessUiWindowTile>& tiles,
     return outcome;
 }
 
-CaptureGrabOutcome compose(const std::vector<ProcessUiWindowTile>& tiles,
-                           ProcessUiCompositeLayout layout,
-                           int padding_px,
-                           int grid_cols)
+CaptureGrabOutcome compose(const std::vector<ProcessUiWindowTile>& tiles, ProcessUiCompositeLayout layout,  int padding_px, int grid_cols)
 {
     if (tiles.size() == 1) {
         CaptureGrabOutcome o;
@@ -261,41 +258,34 @@ ProcessUiCaptureOptions ProcessUiCapture::load_layout_options_from_config()
     return o;
 }
 
-CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(DWORD pid,
-                                                         const std::vector<window_ops::window_info>& surfaces,
-                                                         const ProcessUiCaptureOptions& options,
-                                                         ICaptureSource& capture,
-                                                         uint64_t now_unix_ms)
+CaptureGrabOutcome ProcessUiCapture::grab_process_ui_rgb(const std::vector<window_ops::window_info>& surfaces, const ProcessUiCaptureOptions& options, ICaptureSource& capture, uint64_t now_unix_ms)
 {
     CaptureGrabOutcome outcome;
     outcome.ok = false;
     outcome.need_hold_on_empty_fallback = false;
-    outcome.used_hw_capture = capture.uses_hw_capture();
 
-    if (surfaces.empty())  return outcome;
+    if (surfaces.empty())
+    {
+		std::cout << "[capture] no surfaces to capture\n";
+        return outcome;
+    }
 
     std::vector<ProcessUiWindowTile> tiles;
     if (!capture.capture_tiles(surfaces, tiles, now_unix_ms)) {
+		std::cout << "[capture] capture_tiles failed for " << tiles.size() << " tiles\n";
         return outcome;
     }
 
     outcome = compose(tiles, options.composite_layout, options.composite_padding_px, options.composite_grid_columns);
-    outcome.used_hw_capture = capture.uses_hw_capture();
     if (!outcome.ok || outcome.frame.empty() || outcome.width <= 0 || outcome.height <= 0) {
         outcome.ok = false;
         outcome.frame.clear();
+		std::cout << "[capture] compose failed for " << tiles.size() << " tiles\n";
     }
     return outcome;
 }
 
-bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
-                                                 const std::vector<window_ops::window_info>& surfaces,
-                                                 ICaptureSource& capture,
-                                                 uint64_t now_unix_ms,
-                                                 uint64_t prep_unix_ms,
-                                                 uint64_t frame_id,
-                                                 rpc_video_contract::RawFrame& out_frame,
-                                                 rpc_video_contract::TelemetrySnapshot& out_telem)
+bool ProcessUiCapture::grab_process_ui_raw_frame(const std::vector<window_ops::window_info>& surfaces, ICaptureSource& capture, uint64_t now_unix_ms, uint64_t prep_unix_ms, uint64_t frame_id,  rpc_video_contract::RawFrame& out_frame, rpc_video_contract::TelemetrySnapshot& out_telem)
 {
     ProcessUiCaptureOptions options = load_layout_options_from_config();
     out_frame = rpc_video_contract::RawFrame{};
@@ -304,11 +294,11 @@ bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
     // Keep telemetry valid even when capture fails.
     out_telem.frame_unix_ms = static_cast<rpc_video_contract::TimeUs>(now_unix_ms);
     out_telem.prep_unix_ms = static_cast<rpc_video_contract::TimeUs>(prep_unix_ms);
-    out_telem.backend = capture.uses_hw_capture() ? rpc_video_contract::CaptureBackend::Dxgi : rpc_video_contract::CaptureBackend::Gdi;
+    out_telem.backend = capture.backend();
     out_telem.frame_id = frame_id;
 
     // Reuse existing implementation for now.
-    CaptureGrabOutcome o = grab_process_ui_rgb(pid, surfaces, options, capture, now_unix_ms);
+    CaptureGrabOutcome o = grab_process_ui_rgb(surfaces, options, capture, now_unix_ms);
     if (!o.ok || o.frame.empty() || o.width <= 0 || o.height <= 0)  return false;
 
     // 步骤 1：读取是否启用「可疑帧/黑帧」过滤（可由 RPC_FILTER_CAPTURE_BLACK_FRAMES 关闭）。
@@ -324,8 +314,6 @@ bool ProcessUiCapture::grab_process_ui_raw_frame(DWORD pid,
     out_telem.capture_size = rpc_video_contract::VideoSize{ o.width, o.height };
     out_telem.capture_unix_ms = static_cast<rpc_video_contract::TimeUs>(cap_done_unix_ms);
     out_telem.encode_unix_ms = 0;
-    out_telem.backend = o.used_hw_capture ? rpc_video_contract::CaptureBackend::Dxgi
-                                         : rpc_video_contract::CaptureBackend::Gdi;
 
     out_frame.frame_id = frame_id;
     out_frame.pts_us = static_cast<rpc_video_contract::TimeUs>(cap_done_unix_ms) * 1000;

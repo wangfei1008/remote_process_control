@@ -10,7 +10,7 @@
 #include "input/input_controller.h"
 #include "common/process_ops.h"
 #include "session/session_health_policy.h"
-#include "session/capture_target_resolver.h"
+#include "capture/capture_target_resolver.h"
 
 #include <chrono>
 #include <fstream>
@@ -65,18 +65,10 @@ remote_video_engine::remote_video_engine(const std::string& exe_path, std::funct
     m_video_fps = (std::max)(1, runtime_config::get_int("RPC_ACTIVE_FPS", 30));
     m_video_encode_pipeline->configure(m_video_fps);
 
-    const std::string backend_cfg = to_lower_ascii(runtime_config::get_string("RPC_CAPTURE_BACKEND", "auto"));
-    CaptureKindResolveResult resolved = resolve_capture_kind(backend_cfg);
-    if (resolved.explicit_backend_unavailable) {
-        resolved.kind = ProcessCaptureKind::Gdi;
-        std::cout << "[capture] RPC_CAPTURE_BACKEND=" << backend_cfg
-                  << " unavailable at init; strict mode — no GDI fallback, capture backend not created.\n";
-        m_capture_source.reset();
-    }
-    m_capture_source = create_capture_source(resolved.kind);
+    m_capture_source = create_capture_source();
     if (m_capture_source) {
         m_capture_source->init();
-        std::cout << "[capture] capture_kind=" << static_cast<int>(resolved.kind) << "\n";
+        std::cout << "[capture] capture_kind=" << static_cast<int>(m_capture_source->backend()) << "\n";
     }
 }
 
@@ -292,14 +284,15 @@ void remote_video_engine::capture_loop()
 
         //2. Capture and compose.
         const uint64_t prep_unix_ms = rpc_unix_epoch_ms();
-        const uint64_t frame_id = frame_id_seq++;
+        const uint64_t frame_id = frame_id_seq;
         rpc_video_contract::RawFrame rf;
         rpc_video_contract::TelemetrySnapshot telem;
 
-        if (ProcessUiCapture::grab_process_ui_raw_frame(m_process_ops->capture_pid(), surfaces, *m_capture_source, now_unix_ms, prep_unix_ms, frame_id, rf, telem)) {
+        if (ProcessUiCapture::grab_process_ui_raw_frame(surfaces, *m_capture_source, now_unix_ms, prep_unix_ms, frame_id, rf, telem)) {
             auto* vec = static_cast<std::vector<uint8_t>*>(rf.owned.opaque);
             const int w = rf.coded_size.w;
             const int h = rf.coded_size.h;
+			frame_id_seq++;
             
             // Sanitize in capture thread; do not treat drops as session health failures.
             input_controller::instance()->set_capture_screen_rect(rf.visible_rect.x, rf.visible_rect.y, w, h);
@@ -319,7 +312,8 @@ void remote_video_engine::capture_loop()
                 m_latest_frame.latest = std::move(pkt);
             }
             m_latest_frame.cv.notify_one();
-        }
+        }else
+            std::cout << "[capture] grab_process_ui_raw_frame failed for frame_id=" << frame_id_seq	<< std::endl;
 
         // Pacing.
         next_tick += frame_period;
@@ -366,6 +360,7 @@ void remote_video_engine::encode_loop()
         { // backlog guard
             std::lock_guard<std::mutex> lk(m_latest_encoded.mtx);
             if (m_latest_encoded.q.size() > 3) {
+                std::cout << "[encode] dropping frame_id=" << packet->frame.frame_id << " backlog=" << m_latest_encoded.q.size() << std::endl;
                 release_raw_frame_owned(packet->frame);
                 continue;
             }
@@ -382,6 +377,7 @@ void remote_video_engine::encode_loop()
         //4.确保编码器布局/分辨率策略一致
         const bool layout_ok = m_video_encode_pipeline->ensure_encoder_layout(captured_w, captured_h, target_w, target_h, applied_layout);
         if (!layout_ok) {
+            std::cout << "[encode] unsupported frame layout: frame_id=" << rf.frame_id << std::endl;
             release_raw_frame_owned(rf);
             continue;
         }
@@ -389,7 +385,9 @@ void remote_video_engine::encode_loop()
         //5.编码
         auto* vec = static_cast<std::vector<uint8_t>*>(rf.owned.opaque);
         if (!vec) {
+            std::cout << "[encode] frame missing owned rgb buffer: frame_id=" << rf.frame_id << std::endl;
             release_raw_frame_owned(rf);
+			
             continue;
         }
         VideoEncodeResult enc = m_video_encode_pipeline->encode_frame(*vec, captured_w, captured_h, applied_layout);
@@ -409,6 +407,7 @@ void remote_video_engine::encode_loop()
             }
         } else {
             // If encode fails but we already have a good sample, request keyframe to recover quickly.
+            std::cout << "[encode] encode failed for frame_id=" << rf.frame_id << std::endl;
             request_force_keyframe();
         }
 

@@ -5,7 +5,7 @@
 #include "rdr_signaling.hpp"
 
 struct ReceiverOptions {
-	std::string host = "127.0.0.1";
+	std::string host = "192.168.3.15";
 	int port = 9090;
 	std::string clientId;
 	std::string exePath = "C:\\Windows\\System32\\notepad.exe";
