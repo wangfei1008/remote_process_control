@@ -9,7 +9,6 @@
 #include "encode/video_encode_pipeline.h"
 #include "input/input_controller.h"
 #include "common/process_ops.h"
-#include "session/session_health_policy.h"
 #include "capture/capture_target_resolver.h"
 
 #include <chrono>
@@ -61,7 +60,6 @@ remote_video_engine::remote_video_engine(const std::string& exe_path, std::funct
     m_video_encode_pipeline = std::make_unique<VideoEncodePipeline>();
     m_bmp_dump.configure_from_config();
 
-    m_window_missing_exit_grace_ms = 5000;
     m_video_fps = (std::max)(1, runtime_config::get_int("RPC_ACTIVE_FPS", 30));
     m_video_encode_pipeline->configure(m_video_fps);
 
@@ -84,11 +82,6 @@ bool remote_video_engine::is_remote_process_still_running() const
 
 void remote_video_engine::notify_window_missing_if_needed(const char* why, uint64_t now_unix_ms)
 {
-    // Throttle to avoid spamming front-end; default 2s.
-    const uint64_t throttle_ms = 2000;
-    if (m_last_window_missing_notify_unix_ms != 0 && now_unix_ms >= m_last_window_missing_notify_unix_ms && (now_unix_ms - m_last_window_missing_notify_unix_ms) < throttle_ms) return;
-    m_last_window_missing_notify_unix_ms = now_unix_ms;
-
     if (!m_on_window_missing) return;
     const uint64_t since = m_window_missing_since_unix_ms ? m_window_missing_since_unix_ms : now_unix_ms;
     const uint64_t missing_ms = (now_unix_ms >= since) ? (now_unix_ms - since) : 0;
@@ -257,8 +250,9 @@ void remote_video_engine::capture_loop()
         if (surfaces.empty()) {
             m_main_window = nullptr;
             //1.1 Resolver already attempted recovery and may have rebound m_capture_pid.
-            const bool notify = SessionHealthPolicy::should_notify_remote_exit( now_unix_ms, m_window_missing_since_unix_ms, m_window_missing_exit_grace_ms);
-            if (notify) {
+            if(m_window_missing_since_unix_ms == 0)  m_window_missing_since_unix_ms = now_unix_ms;
+            if (now_unix_ms - m_window_missing_since_unix_ms >= 5000) {
+				m_window_missing_since_unix_ms = 0;// reset timer after grace expired
                 if (is_remote_process_still_running()) {
                     notify_window_missing_if_needed("no_surfaces_grace_expired_but_process_alive", now_unix_ms);
                 } else {
@@ -274,7 +268,6 @@ void remote_video_engine::capture_loop()
                       << " owner_pid=" << resolved.main_hwnd_owner_pid
                       << " pid_rebound=" << (resolved.capture_pid_rebound ? 1 : 0)
                       << " main_from_surfaces=" << (resolved.main_hwnd_selected_from_surfaces ? 1 : 0)
-                      << " notify_remote_exit_if_needed=" << notify
 				<< std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
             continue;

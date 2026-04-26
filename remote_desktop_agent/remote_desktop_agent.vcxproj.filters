@@ -111,9 +111,6 @@
     <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp">
       <Filter>rpc_core\encode</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\session\session_health_policy.cpp">
-      <Filter>rpc_core\session</Filter>
-    </ClCompile>
     <ClCompile Include="rpc_core\session\remote_desktop_media_session.cpp">
       <Filter>rpc_core\session</Filter>
     </ClCompile>
@@ -226,9 +223,6 @@
     </ClInclude>
     <ClInclude Include="rpc_core\encode\video_encode_pipeline.h">
       <Filter>rpc_core\encode</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\session\session_health_policy.h">
-      <Filter>rpc_core\session</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\session\remote_desktop_media_session.h">
       <Filter>rpc_core\session</Filter>

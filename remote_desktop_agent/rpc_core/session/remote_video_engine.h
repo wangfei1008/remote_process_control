@@ -83,6 +83,4 @@ private:
     BmpDumpWriter m_bmp_dump;
 
 	uint64_t m_window_missing_since_unix_ms = 0;//第一次检测到窗口缺失的时间戳，用于判断是否超过 grace 时间阈值以触发远程退出通知。
-	uint32_t m_window_missing_exit_grace_ms = 0;//窗口缺失触发远程退出通知的宽限时间，单位毫秒，构造时从配置加载。
-    uint64_t m_last_window_missing_notify_unix_ms = 0;
 };

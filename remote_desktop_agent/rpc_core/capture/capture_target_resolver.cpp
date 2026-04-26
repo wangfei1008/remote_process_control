@@ -4,7 +4,6 @@
 #include "common/process_ops.h"
 #include "common/character_conversion.h"
 #include "common/rpc_time.h"
-#include "session/session_health_policy.h"
 
 #include <algorithm>
 #include <functional>
@@ -259,7 +258,13 @@ static HWND try_recover_main_window(const process_ops& proc, DWORD& io_capture_p
     return main_window;
 }
 
-
+static bool is_window_viable_for_capture(HWND hwnd)
+{
+    window_ops wops;
+    if (!wops.is_valid(hwnd)) return false;
+    const int score = score_window_for_capture(hwnd, 0, false);
+    return score > 0;
+}
 
 } // namespace
 
@@ -274,7 +279,7 @@ CaptureTargetResolveResult CaptureTargetResolver::resolve(process_ops& proc, HWN
     window_ops wops;
 
     // 1) If we already have a viable main window, prefer its owner PID for capture.
-    if (r.main_hwnd && SessionHealthPolicy::is_window_viable_for_capture(r.main_hwnd)) {
+    if (r.main_hwnd && is_window_viable_for_capture(r.main_hwnd)) {
         const DWORD owner_pid = wops.get_window_pid(r.main_hwnd);
         r.main_hwnd_owner_pid = owner_pid;
         if (owner_pid != 0 && owner_pid != io_capture_pid) {
