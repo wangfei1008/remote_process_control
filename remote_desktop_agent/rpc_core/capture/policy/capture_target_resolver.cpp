@@ -3,6 +3,7 @@
 // ============================================================
 
 #include "capture_target_resolver.h"
+#include "common/rpc_time.h"
 #include <algorithm>
 #include <limits>
 #include <iostream>
@@ -62,7 +63,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
     if (basename.empty() || launch_pid == 0) return nullptr;
 
     const std::string target(basename);
-
+    std::cout << "[resolver] time 3.1.1 = " << rpc_unix_epoch_ms() << std::endl;
     // 1) 按 exe basename 精确匹配进程
     HWND hwnd = find_best_window(
         0, false,
@@ -71,7 +72,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
             return m_deps.prims.basename_lower(info.pid) == target;
         },
         nullptr);
-
+    std::cout << "[resolver] time 3.1.2 = " << rpc_unix_epoch_ms() << std::endl;
     bool by_hint = false;
 
     if (!hwnd) {
@@ -79,7 +80,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
         std::string stem = target;
         const auto pos = stem.rfind(".exe");
         if (pos != std::string::npos) stem = stem.substr(0, pos);
-
+        std::cout << "[resolver] time 3.1.3 = " << rpc_unix_epoch_ms() << std::endl;
         if (!stem.empty()) {
             hwnd = find_best_window(
                 0, false,
@@ -98,7 +99,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
             by_hint = (hwnd != nullptr);
         }
     }
-
+    std::cout << "[resolver] time 3.1.4 = " << rpc_unix_epoch_ms() << std::endl;
     if (!hwnd) return nullptr;
 
     const DWORD real_pid = m_deps.wops.pid(hwnd);
@@ -111,7 +112,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
                   << " pid=" << real_pid
                   << " exe=" << target << '\n';
     }
-
+    std::cout << "[resolver] time 3.1.5 = " << rpc_unix_epoch_ms() << std::endl;
     return hwnd;
 }
 
@@ -145,7 +146,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
     r.diag.previous_capture_pid = input.current_capture_pid;
 
     DWORD cap_pid = input.current_capture_pid;
-
+    std::cout << "[resolver] time 1 = " << rpc_unix_epoch_ms()  <<std::endl;
     // ----------------------------------------------------------
     // 路径 1：已有可用主窗口 → 直接用其 owner PID
     // ----------------------------------------------------------
@@ -170,7 +171,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         }
         return r;
     }
-
+    std::cout << "[resolver] time 2 = " << rpc_unix_epoch_ms() << std::endl;
     // ----------------------------------------------------------
     // 路径 2：按当前 capture_pid 枚举 surfaces（快路径）
     // ----------------------------------------------------------
@@ -184,7 +185,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
             return r;
         }
     }
-
+    std::cout << "[resolver] time 3 = " << rpc_unix_epoch_ms() << std::endl;
     // ----------------------------------------------------------
     // 路径 3：恢复路径（仅当 allow_pid_rebind 且 launch_pid 存活）
     // ----------------------------------------------------------
@@ -192,10 +193,9 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         && input.launch_pid != 0
         && !input.target_basename.empty()
         && m_deps.prims.is_running(input.launch_pid)) {
-
+        std::cout << "[resolver] time 3.1 = " << rpc_unix_epoch_ms() << std::endl;
         DWORD new_pid = 0;
-        HWND recovered = try_recover_by_exe(
-            input.launch_pid, input.target_basename, new_pid);
+        HWND recovered = try_recover_by_exe(input.launch_pid, input.target_basename, new_pid);
 
         if (recovered && new_pid != 0) {
             if (new_pid != cap_pid) {
@@ -217,7 +217,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
     } else {
         r.diag.reason = "no_rebind_allowed";
     }
-
+    std::cout << "[resolver] time 4 = " << rpc_unix_epoch_ms() << std::endl;
     // 用最终确定的 PID 刷新 surfaces
     if (r.capture_pid != 0) {
         r.surfaces = m_deps.wops.enumerate_visible_top_level(r.capture_pid);
@@ -227,7 +227,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         r.main_hwnd_owner_pid         = m_deps.wops.pid(r.main_hwnd);
         r.diag.selected_from_surfaces = true;
     }
-
+    std::cout << "[resolver] time 5 = " << rpc_unix_epoch_ms() << std::endl;
     return r;
 }
 

@@ -25,6 +25,11 @@
 
 class VideoEncodePipeline;
 
+namespace remote_video_engine_detail {
+class CaptureWorker;
+class EncodeWorker;
+} // namespace remote_video_engine_detail
+
 struct CapturedRawFrameWithTelemetry {
     rpc_video_contract::RawFrame frame;
     rpc_video_contract::TelemetrySnapshot telem;
@@ -51,13 +56,14 @@ public:
     HWND get_main_window() const;
 
 private:
+    friend class remote_video_engine_detail::CaptureWorker;
+    friend class remote_video_engine_detail::EncodeWorker;
+
     void notify_remote_exit_if_needed(const char* why);
     void notify_window_missing_if_needed(const char* why, uint64_t now_unix_ms);
-    bool is_remote_process_still_running() const;
+    bool is_remote_process_still_running_from_snapshot() const;
 
-    void reset_for_session_start();
     void ensure_capture_stack();
-
     void exit_watch_loop();
     void capture_loop();
     void encode_loop();
@@ -65,14 +71,19 @@ private:
 private:
     std::function<void()> m_on_remote_process_exit;
     window_missing_fn m_on_window_missing;
-
     
     std::atomic<bool> m_exit_notified{false};
 
-    HWND m_main_window = nullptr;
+    // capture 线程写；其他线程读
+    std::atomic<HWND> m_main_window{nullptr};
+
+    // pid 快照：capture 线程更新；exit_watch 线程只读（避免跨线程触碰 ProcessSession）
+    std::atomic<DWORD> m_launch_pid_for_watch{0};
+    std::atomic<DWORD> m_capture_pid_for_watch{0};
+    std::atomic<bool> m_launch_running_for_watch{false};
 
     std::atomic<bool> m_running{false};
-    std::thread m_exit_watch_thread; 
+    std::thread m_exit_watch_thread;
     std::atomic<bool> m_threads_running{false};
     std::thread m_capture_thread;
     std::thread m_encode_thread; 
@@ -95,7 +106,4 @@ private:
     int m_video_fps = 30;
 
     std::unique_ptr<VideoEncodePipeline> m_video_encode_pipeline;
-    BmpDumpWriter m_bmp_dump;
-
-	uint64_t m_window_missing_since_unix_ms = 0;//第一次检测到窗口缺失的时间戳，用于判断是否超过 grace 时间阈值以触发远程退出通知。
 };

@@ -101,7 +101,7 @@ bool CapturePipeline::grab_raw_frame(
     GrabResult r = grab(surfaces, now_unix_ms, opts, filter_black);
     if (!r.ok) return false;
 
-    const ComposedFrame& f = r.frame;
+    ComposedFrame f = std::move(r.frame);
 
     // ---- 填充遥测 -------------------------------------------
     out_telem.capture_size    = rpc_video_contract::VideoSize{ f.width, f.height };
@@ -109,8 +109,7 @@ bool CapturePipeline::grab_raw_frame(
         static_cast<rpc_video_contract::TimeUs>(r.telem.cap_unix_ms);
 
     // ---- 填充 RawFrame（零拷贝移动像素 buffer）--------------
-    auto* vec = new std::vector<uint8_t>(std::move(
-        const_cast<ComposedFrame&>(f).pixels));
+    auto* vec = new std::vector<uint8_t>(std::move(f.pixels));
 
     out_frame.frame_id    = frame_id;
     out_frame.pts_us      =

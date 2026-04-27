@@ -40,9 +40,7 @@ bool ProcessSession::start() {
         return false;
     }
 
-    m_target_basename_lower =
-        win32::Process::to_lower_ascii(
-            win32::Process::basename_from_path(m_cfg.exe_path));
+    m_target_basename_lower = win32::Process::to_lower_ascii(win32::Process::basename_from_path(m_cfg.exe_path));
     m_pi.get()    = pi;
     m_launch_pid  = pi.dwProcessId;
     m_capture_pid = m_launch_pid;

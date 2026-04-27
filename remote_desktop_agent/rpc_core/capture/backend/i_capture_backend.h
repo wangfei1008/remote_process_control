@@ -28,10 +28,7 @@ public:
     // 全部成功 → 返回 true，tiles 填满
     // 任意失败 → 返回 false，tiles 内容不可信
     [[nodiscard]]
-    virtual bool capture_tiles(
-        std::span<const win32::WindowInfo> surfaces,
-        std::vector<WindowTile>&           out_tiles,
-        uint64_t                           now_unix_ms) = 0;
+    virtual bool capture_tiles( std::span<const win32::WindowInfo> surfaces, std::vector<WindowTile>& out_tiles, uint64_t now_unix_ms) = 0;
 
     // 新视频流开始时由 CaptureSession 调用
     // 用途：清除跨流的失败计数器、重置 DXGI duplication 等

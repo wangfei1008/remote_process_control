@@ -1,10 +1,12 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 // 实现层（engine 私有）：线程同步容器、丢帧统计等。
 // - 不承载跨模块语义；不应被 transport/receiver 等模块依赖
@@ -27,6 +29,20 @@ template <class T>
 struct BoundedQueue {
     std::mutex mtx;
     std::deque<T> q;
+    size_t max_size = 0; // 0 表示不限制
+    uint64_t dropped = 0;
+
+    void set_max_size(size_t n) { max_size = n; }
+
+    void push_bounded(T&& v) {
+        if (max_size > 0) {
+            while (q.size() >= max_size) {
+                q.pop_front();
+                ++dropped;
+            }
+        }
+        q.push_back(std::move(v));
+    }
 };
 
 } // namespace rpc_video_engine_impl

@@ -45,6 +45,7 @@
     <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
     <ClCompile Include="rpc_core\session\remote_video_engine.cpp" />
     <ClCompile Include="rpc_core\source\silence_opus_generator.cpp" />
+    <ClCompile Include="rpc_core\session\remote_video_engine_workers.cpp" />
     <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp" />
     <ClCompile Include="rpc_core\transport\remote_file_transfer_controller.cpp" />
     <ClCompile Include="rpc_core\transport\remote_file_store_repository.cpp" />
@@ -58,6 +59,7 @@
     <ClInclude Include="rpc_core\common\character_conversion.h" />
     <ClInclude Include="rpc_core\common\remote_video_contract.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h" />
+    <ClInclude Include="rpc_core\session\remote_video_engine_workers.h" />
     <ClInclude Include="signaling\signaling_event.h" />
     <ClInclude Include="signaling\signaling_observer.h" />
     <ClInclude Include="signaling\signaling_transport.h" />

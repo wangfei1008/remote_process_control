@@ -168,6 +168,9 @@
     <ClCompile Include="rpc_core\capture\policy\window_score_policy.cpp">
       <Filter>rpc_core\capture\policy</Filter>
     </ClCompile>
+    <ClCompile Include="rpc_core\session\remote_video_engine_workers.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="app\rpc_remote_application.h">
@@ -313,6 +316,9 @@
     </ClInclude>
     <ClInclude Include="rpc_core\capture\backend\window_tile.h">
       <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\remote_video_engine_workers.h">
+      <Filter>rpc_core\session</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
