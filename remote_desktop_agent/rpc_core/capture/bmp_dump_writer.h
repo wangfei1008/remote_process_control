@@ -38,4 +38,3 @@ private:
     bool m_dir_ready = false;
     std::string m_output_dir;
 };
-

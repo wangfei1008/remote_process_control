@@ -16,7 +16,6 @@
     <ClCompile Include="app\rpc_remote_application.cpp" />
     <ClCompile Include="bootstrap\runtime_settings.cpp" />
     <ClCompile Include="input\input_controller.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_target_resolver.cpp" />
     <ClCompile Include="rpc_core\common\character_conversion.cpp" />
     <ClCompile Include="signaling\signaling_transport.cpp" />
     <ClCompile Include="orchestration\active_desktop_session.cpp" />
@@ -26,18 +25,22 @@
     <ClCompile Include="webrtc\operator_channel.cpp" />
     <!-- rpc_core：远程进程 / 采集 / 编码 / 传输（自包含副本，不引用 ..\rpc_remote_client） -->
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp" />
+    <ClCompile Include="rpc_core\capture\infra\win32_process.cpp" />
+    <ClCompile Include="rpc_core\capture\infra\win32_window.cpp" />
+    <ClCompile Include="rpc_core\capture\session\process_session.cpp" />
+    <ClCompile Include="rpc_core\capture\policy\window_score_policy.cpp" />
+    <ClCompile Include="rpc_core\capture\policy\capture_target_resolver.cpp" />
+    <ClCompile Include="rpc_core\capture\backend\capture_backend_factory.cpp" />
+    <ClCompile Include="rpc_core\capture\backend\dxgi_capture_backend.cpp" />
+    <ClCompile Include="rpc_core\capture\backend\gdi_capture_backend.cpp" />
+    <ClCompile Include="rpc_core\capture\pipeline\frame_filter.cpp" />
+    <ClCompile Include="rpc_core\capture\pipeline\frame_composer.cpp" />
+    <ClCompile Include="rpc_core\capture\pipeline\capture_pipeline.cpp" />
     <ClCompile Include="rpc_core\transport\client_peer_connection.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_source_factory.cpp" />
-    <ClCompile Include="rpc_core\capture\dxgi_process_ui_capture_backend.cpp" />
-    <ClCompile Include="rpc_core\capture\gdi_process_ui_capture_backend.cpp" />
-    <ClCompile Include="rpc_core\capture\i_capture_source.cpp" />
-    <ClCompile Include="rpc_core\capture\process_ui_capture.cpp" />
     <ClCompile Include="rpc_core\transport\dispatch_queue.cpp" />
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp" />
     <ClCompile Include="rpc_core\encode\h264_encoder.cpp" />
-    <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp" />
-    <ClCompile Include="rpc_core\common\process_ops.cpp" />
     <ClCompile Include="rpc_core\common\window_ops.cpp" />
     <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
     <ClCompile Include="rpc_core\session\remote_video_engine.cpp" />
@@ -52,7 +55,6 @@
     <ClInclude Include="app\runtime_config.h" />
     <ClInclude Include="bootstrap\runtime_settings.h" />
     <ClInclude Include="input\input_controller.h" />
-    <ClInclude Include="rpc_core\capture\capture_target_resolver.h" />
     <ClInclude Include="rpc_core\common\character_conversion.h" />
     <ClInclude Include="rpc_core\common\remote_video_contract.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h" />
@@ -66,14 +68,23 @@
     <ClInclude Include="media\media_pipeline.h" />
     <ClInclude Include="webrtc\operator_channel.h" />
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h" />
-    <ClInclude Include="rpc_core\capture\capture_source_factory.h" />
-    <ClInclude Include="rpc_core\capture\dxgi_process_ui_capture_backend.h" />
-    <ClInclude Include="rpc_core\capture\gdi_process_ui_capture_backend.h" />
-    <ClInclude Include="rpc_core\capture\i_capture_source.h" />
-    <ClInclude Include="rpc_core\capture\process_ui_tile.h" />
-    <ClInclude Include="rpc_core\capture\process_ui_capture.h" />
-    <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h" />
-    <ClInclude Include="rpc_core\common\process_ops.h" />
+    <ClInclude Include="rpc_core\capture\capture.h" />
+    <ClInclude Include="rpc_core\capture\infra\win32_types.h" />
+    <ClInclude Include="rpc_core\capture\infra\win32_process.h" />
+    <ClInclude Include="rpc_core\capture\infra\win32_window.h" />
+    <ClInclude Include="rpc_core\capture\infra\gdi_resource_guards.h" />
+    <ClInclude Include="rpc_core\capture\session\process_session.h" />
+    <ClInclude Include="rpc_core\capture\policy\window_score_policy.h" />
+    <ClInclude Include="rpc_core\capture\policy\capture_target_resolver.h" />
+    <ClInclude Include="rpc_core\capture\backend\capture_backend_kind.h" />
+    <ClInclude Include="rpc_core\capture\backend\window_tile.h" />
+    <ClInclude Include="rpc_core\capture\backend\i_capture_backend.h" />
+    <ClInclude Include="rpc_core\capture\backend\dxgi_capture_backend.h" />
+    <ClInclude Include="rpc_core\capture\backend\gdi_capture_backend.h" />
+    <ClInclude Include="rpc_core\capture\backend\capture_backend_factory.h" />
+    <ClInclude Include="rpc_core\capture\pipeline\frame_filter.h" />
+    <ClInclude Include="rpc_core\capture\pipeline\frame_composer.h" />
+    <ClInclude Include="rpc_core\capture\pipeline\capture_pipeline.h" />
     <ClInclude Include="rpc_core\common\rpc_time.h" />
     <ClInclude Include="rpc_core\common\window_ops.h" />
     <ClInclude Include="rpc_core\encode\encoder_layout_policy.h" />
@@ -123,7 +134,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)rpc_core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -137,7 +148,7 @@
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)rpc_core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>

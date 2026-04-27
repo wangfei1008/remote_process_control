@@ -43,6 +43,21 @@
     <Filter Include="rpc_core\common">
       <UniqueIdentifier>{A1B00002-0001-4000-8000-000000000018}</UniqueIdentifier>
     </Filter>
+    <Filter Include="rpc_core\capture\backend">
+      <UniqueIdentifier>{d9747eba-3f78-4068-8f27-97257f7045d8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\capture\infra">
+      <UniqueIdentifier>{f64bb75d-952d-4233-8dfc-01e7a06f2181}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\capture\pipeline">
+      <UniqueIdentifier>{6704e305-5edc-4baa-a47c-64607cc43d0a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\capture\policy">
+      <UniqueIdentifier>{e6269429-d262-483e-a4b2-d1799c70f7a2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rpc_core\capture\session">
+      <UniqueIdentifier>{60eac0ff-4d32-4e09-8956-de0720192d85}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="app\main.cpp">
@@ -74,27 +89,6 @@
     </ClCompile>
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp">
       <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_source_factory.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\dxgi_process_ui_capture_backend.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\gdi_process_ui_capture_backend.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\i_capture_source.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\process_ui_capture.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_rgb_heuristics.cpp">
-      <Filter>rpc_core\capture</Filter>
-    </ClCompile>
-    <ClCompile Include="rpc_core\common\process_ops.cpp">
-      <Filter>rpc_core\common</Filter>
     </ClCompile>
     <ClCompile Include="rpc_core\common\window_ops.cpp">
       <Filter>rpc_core\common</Filter>
@@ -141,8 +135,38 @@
     <ClCompile Include="rpc_core\common\character_conversion.cpp">
       <Filter>rpc_core\common</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\capture\capture_target_resolver.cpp">
-      <Filter>rpc_core\capture</Filter>
+    <ClCompile Include="rpc_core\capture\backend\capture_backend_factory.cpp">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\backend\dxgi_capture_backend.cpp">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\pipeline\capture_pipeline.cpp">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\policy\capture_target_resolver.cpp">
+      <Filter>rpc_core\capture\policy</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\pipeline\frame_composer.cpp">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\pipeline\frame_filter.cpp">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\backend\gdi_capture_backend.cpp">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\session\process_session.cpp">
+      <Filter>rpc_core\capture\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\infra\win32_process.cpp">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\infra\win32_window.cpp">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\capture\policy\window_score_policy.cpp">
+      <Filter>rpc_core\capture\policy</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -182,29 +206,8 @@
     <ClInclude Include="rpc_core\capture\bmp_dump_writer.h">
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_source_factory.h">
+    <ClInclude Include="rpc_core\capture\capture.h">
       <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\process_ui_capture.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\dxgi_process_ui_capture_backend.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\gdi_process_ui_capture_backend.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\i_capture_source.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\process_ui_tile.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_rgb_heuristics.h">
-      <Filter>rpc_core\capture</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\common\process_ops.h">
-      <Filter>rpc_core\common</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\common\rpc_time.h">
       <Filter>rpc_core\common</Filter>
@@ -263,8 +266,53 @@
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
-    <ClInclude Include="rpc_core\capture\capture_target_resolver.h">
-      <Filter>rpc_core\capture</Filter>
+    <ClInclude Include="rpc_core\capture\backend\capture_backend_factory.h">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\backend\capture_backend_kind.h">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\backend\dxgi_capture_backend.h">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\pipeline\capture_pipeline.h">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\policy\capture_target_resolver.h">
+      <Filter>rpc_core\capture\policy</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\pipeline\frame_composer.h">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\pipeline\frame_filter.h">
+      <Filter>rpc_core\capture\pipeline</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\backend\gdi_capture_backend.h">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\infra\gdi_resource_guards.h">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\backend\i_capture_backend.h">
+      <Filter>rpc_core\capture\backend</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\session\process_session.h">
+      <Filter>rpc_core\capture\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\infra\win32_process.h">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\infra\win32_types.h">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\infra\win32_window.h">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\policy\window_score_policy.h">
+      <Filter>rpc_core\capture\policy</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\backend\window_tile.h">
+      <Filter>rpc_core\capture\backend</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

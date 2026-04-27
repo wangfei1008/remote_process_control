@@ -11,9 +11,15 @@
 #include "rtc/rtc.hpp"
 
 #include "capture/bmp_dump_writer.h"
-#include "capture/i_capture_source.h"
-#include "capture/process_ui_capture.h"
-#include "common/process_ops.h"
+#include "capture/backend/i_capture_backend.h"
+#include "capture/pipeline/capture_pipeline.h"
+#include "capture/pipeline/frame_composer.h"
+#include "capture/pipeline/frame_filter.h"
+#include "capture/policy/capture_target_resolver.h"
+#include "capture/policy/window_score_policy.h"
+#include "capture/session/process_session.h"
+#include "capture/infra/win32_process.h"
+#include "capture/infra/win32_window.h"
 #include "common/remote_video_contract.h"
 #include "session/remote_video_engine_impl_types.h"
 
@@ -50,6 +56,7 @@ private:
     bool is_remote_process_still_running() const;
 
     void reset_for_session_start();
+    void ensure_capture_stack();
 
     void exit_watch_loop();
     void capture_loop();
@@ -73,9 +80,17 @@ private:
     rpc_video_engine_impl::LatestRawFrame<CapturedRawFrameWithTelemetry> m_latest_frame;
     rpc_video_engine_impl::BoundedQueue<EncodedFrameWithTelemetry> m_latest_encoded;
 
-	std::unique_ptr<process_ops> m_process_ops;
+    capture::ProcessSession m_session;
 
-    std::unique_ptr<ICaptureSource> m_capture_source;
+    win32::Window m_wops;
+    win32::Process m_prims;
+    capture::WindowScorePolicy m_score_policy;
+    capture::CaptureTargetResolver m_resolver;
+
+    std::unique_ptr<capture::ICaptureBackend> m_backend;
+    capture::FrameComposer m_composer;
+    capture::FrameFilter m_filter;
+    std::unique_ptr<capture::CapturePipeline> m_pipeline;
 
     int m_video_fps = 30;
 

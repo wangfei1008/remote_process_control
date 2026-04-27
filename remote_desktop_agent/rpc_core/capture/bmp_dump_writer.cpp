@@ -143,4 +143,3 @@ void BmpDumpWriter::dump_if_needed(const std::vector<uint8_t>& frame, int width,
               << " dxgiDisabledForSession=" << (diag.dxgi_disabled_for_session ? 1 : 0)
               << std::endl;
 }
-
