@@ -4,6 +4,7 @@
 
 #include "process_session.h"
 #include "../infra/win32_process.h"
+#include <iostream>
 
 namespace capture {
 
@@ -40,6 +41,20 @@ bool ProcessSession::start() {
         return false;
     }
 
+    // Create/assign job identity early so descendant/parent changes won't break session tracking.
+    m_job_assigned = false;
+    m_job.create(nullptr);
+    if (m_job.valid()) {
+        // Default: do not kill on close; keep semantics aligned with previous stop() behavior.
+        // Can be changed later by config if needed.
+        (void)m_job.set_kill_on_job_close(false);
+        m_job_assigned = m_job.assign_process(pi.hProcess);
+        if (!m_job_assigned) {
+            // Keep running without job identity (fallback to legacy PID logic).
+            m_job.reset();
+        }
+    }
+
     m_target_basename_lower = win32::Process::to_lower_ascii(win32::Process::basename_from_path(m_cfg.exe_path));
     m_pi.get()    = pi;
     m_launch_pid  = pi.dwProcessId;
@@ -65,6 +80,8 @@ void ProcessSession::stop(StopOptions opts) {
     m_launch_pid  = 0;
     m_capture_pid = 0;
     m_target_basename_lower.clear();
+    m_job.reset();
+    m_job_assigned = false;
     // 保留 m_cfg.exe_path：与 legacy process_ops::terminate 语义对齐，允许同一会话对象再次 start()
 
     if (opts.terminate_capture
@@ -88,6 +105,47 @@ DWORD ProcessSession::launch_exit_code() const {
     return win32::Process{}.exit_code(m_pi.process_handle());
 #else
     return 0;
+#endif
+}
+
+std::vector<DWORD> ProcessSession::session_pids() const
+{
+#if defined(_WIN32)
+    if (has_job_identity()) {
+		std::cout << "[proc] query session pids from job for launch_pid=" << m_launch_pid << std::endl;
+        return m_job.query_process_ids();
+    }
+    std::vector<DWORD> out;
+    if (m_capture_pid) out.push_back(m_capture_pid);
+    if (m_launch_pid && m_launch_pid != m_capture_pid) out.push_back(m_launch_pid);
+    return out;
+#else
+    return {};
+#endif
+}
+
+bool ProcessSession::is_session_alive_with_pids(const DWORD* session_pids_data, size_t session_pids_count) const
+{
+#if defined(_WIN32)
+    if (has_job_identity()) {
+        return session_pids_count > 0;
+    }
+    if (is_launch_running()) {
+        return true;
+    }
+    win32::Process prims;
+    const size_t n = session_pids_data ? session_pids_count : 0;
+    for (size_t i = 0; i < n; ++i) {
+        const DWORD pid = session_pids_data[i];
+        if (pid != 0 && prims.is_running(pid)) {
+            return true;
+        }
+    }
+    return false;
+#else
+    (void)session_pids_data;
+    (void)session_pids_count;
+    return false;
 #endif
 }
 

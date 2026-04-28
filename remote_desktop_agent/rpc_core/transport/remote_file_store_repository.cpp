@@ -33,7 +33,9 @@ bool remote_file_store_repository::is_text_preview_ext(const std::string& ext_ra
 std::filesystem::path remote_file_store_repository::path_from_utf8(const std::string& value)
 {
 #if defined(_WIN32)
-    return std::filesystem::u8path(value);
+    // On Windows, this preserves UTF-8 → UTF-16 conversion behavior.
+    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(value.data()),
+                                               reinterpret_cast<const char8_t*>(value.data() + value.size())));
 #else
     return std::filesystem::path(value);
 #endif

@@ -20,6 +20,7 @@
 #include "window_score_policy.h"
 
 #include <functional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -35,6 +36,10 @@ struct CaptureTargetInput {
     HWND             current_main_hwnd  = nullptr;
     // 调用方决定是否允许 rebind，而不是在 resolver 内部猜
     bool             allow_pid_rebind   = true;
+
+    // Session Identity: stable PID set (e.g. Job object membership).
+    std::span<const DWORD> session_pids{};
+    bool             use_session_pids   = true;
 };
 
 // ----------------------------------------------------------

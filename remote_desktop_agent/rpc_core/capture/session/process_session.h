@@ -13,7 +13,10 @@
 // ============================================================
 
 #include "../infra/win32_types.h"
+#include "../infra/win32_job.h"
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace capture {
 
@@ -70,6 +73,13 @@ public:
     const std::string& target_basename_lower()  const { return m_target_basename_lower; }
     const std::string& exe_path()               const { return m_cfg.exe_path; }
     DWORD              launch_exit_code()       const;
+    bool               has_job_identity()       const { return m_job.valid() && m_job_assigned; }
+    std::vector<DWORD> session_pids()           const;
+
+    // Session 是否仍有存活成员（供 watchdog 与 capture 线程复用同一次 session_pids 快照）
+    // - 有 Job：非空列表 ⇒ 内核侧会话仍有进程（不受 PID 漂移 / 重父化影响）
+    // - 无 Job：launch 句柄仍存活，或快照中任一 PID 仍 STILL_ACTIVE
+    bool is_session_alive_with_pids(const DWORD* session_pids_data, size_t session_pids_count) const;
 
     // ---- capture_pid 重绑 --------------------------------
     // 明确表达语义：调用方在 resolver 建议后，由此方法更新绑定
@@ -85,6 +95,10 @@ private:
     DWORD                m_launch_pid             = 0;
     DWORD                m_capture_pid            = 0;
     std::string          m_target_basename_lower;
+
+    // Session Identity: Job object that tracks all processes of this launched app instance.
+    win32::Job           m_job;
+    bool                 m_job_assigned           = false;
 };
 
 } // namespace capture

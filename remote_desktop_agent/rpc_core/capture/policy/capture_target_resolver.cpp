@@ -8,6 +8,7 @@
 #include <limits>
 #include <iostream>
 #include <functional>
+#include <unordered_set>
 
 namespace capture {
 
@@ -63,7 +64,6 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
     if (basename.empty() || launch_pid == 0) return nullptr;
 
     const std::string target(basename);
-    std::cout << "[resolver] time 3.1.1 = " << rpc_unix_epoch_ms() << std::endl;
     // 1) 按 exe basename 精确匹配进程
     HWND hwnd = find_best_window(
         0, false,
@@ -72,7 +72,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
             return m_deps.prims.basename_lower(info.pid) == target;
         },
         nullptr);
-    std::cout << "[resolver] time 3.1.2 = " << rpc_unix_epoch_ms() << std::endl;
+
     bool by_hint = false;
 
     if (!hwnd) {
@@ -80,7 +80,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
         std::string stem = target;
         const auto pos = stem.rfind(".exe");
         if (pos != std::string::npos) stem = stem.substr(0, pos);
-        std::cout << "[resolver] time 3.1.3 = " << rpc_unix_epoch_ms() << std::endl;
+
         if (!stem.empty()) {
             hwnd = find_best_window(
                 0, false,
@@ -99,7 +99,7 @@ HWND CaptureTargetResolver::try_recover_by_exe(DWORD launch_pid, std::string_vie
             by_hint = (hwnd != nullptr);
         }
     }
-    std::cout << "[resolver] time 3.1.4 = " << rpc_unix_epoch_ms() << std::endl;
+
     if (!hwnd) return nullptr;
 
     const DWORD real_pid = m_deps.wops.pid(hwnd);
@@ -130,6 +130,36 @@ HWND CaptureTargetResolver::primary_from_surfaces(const std::vector<win32::Windo
     return best;
 }
 
+namespace {
+
+static bool pid_in_set(DWORD pid, const std::unordered_set<DWORD>& set)
+{
+    if (pid == 0) return false;
+    return set.find(pid) != set.end();
+}
+
+static void append_surfaces_for_pid(const win32::Window& wops,
+                                   DWORD pid,
+                                   std::vector<win32::WindowInfo>& io_out)
+{
+    auto v = wops.enumerate_visible_top_level(pid);
+    io_out.insert(io_out.end(), v.begin(), v.end());
+}
+
+static void dedup_surfaces_by_hwnd(std::vector<win32::WindowInfo>& io_surfaces)
+{
+    std::unordered_set<HWND> seen;
+    std::vector<win32::WindowInfo> out;
+    out.reserve(io_surfaces.size());
+    for (auto& s : io_surfaces) {
+        if (!s.hwnd) continue;
+        if (seen.insert(s.hwnd).second) out.push_back(std::move(s));
+    }
+    io_surfaces.swap(out);
+}
+
+} // namespace
+
 bool CaptureTargetResolver::is_main_hwnd_viable(HWND hwnd) const {
     if (!hwnd) return false;
     win32::WindowInfo info = m_deps.wops.snapshot(hwnd);
@@ -146,7 +176,38 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
     r.diag.previous_capture_pid = input.current_capture_pid;
 
     DWORD cap_pid = input.current_capture_pid;
-    std::cout << "[resolver] time 1 = " << rpc_unix_epoch_ms()  <<std::endl;
+
+    // ----------------------------------------------------------
+    // 路径 0：Session Identity（Job PID 集合）优先
+    // ----------------------------------------------------------
+    if (input.use_session_pids && !input.session_pids.empty()) {
+        std::unordered_set<DWORD> pidset;
+        pidset.reserve(input.session_pids.size() * 2);
+        for (DWORD p : input.session_pids) {
+            if (p) pidset.insert(p);
+        }
+
+        // surfaces: union of all visible top-level windows for every pid in the session set
+        r.surfaces.clear();
+        r.surfaces.reserve(32);
+        for (DWORD p : pidset) {
+            append_surfaces_for_pid(m_deps.wops, p, r.surfaces);
+        }
+        dedup_surfaces_by_hwnd(r.surfaces);
+
+        if (!r.surfaces.empty()) {
+            r.main_hwnd = primary_from_surfaces(r.surfaces);
+            r.main_hwnd_owner_pid = m_deps.wops.pid(r.main_hwnd);
+            r.capture_pid = r.main_hwnd_owner_pid ? r.main_hwnd_owner_pid : input.current_capture_pid;
+            if (r.capture_pid != input.current_capture_pid && r.capture_pid != 0) {
+                r.diag.pid_rebound = true;
+            }
+            r.diag.selected_from_surfaces = true;
+            r.diag.reason = "surfaces_by_session_pids";
+            return r;
+        }
+    }
+
     // ----------------------------------------------------------
     // 路径 1：已有可用主窗口 → 直接用其 owner PID
     // ----------------------------------------------------------
@@ -171,7 +232,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         }
         return r;
     }
-    std::cout << "[resolver] time 2 = " << rpc_unix_epoch_ms() << std::endl;
+
     // ----------------------------------------------------------
     // 路径 2：按当前 capture_pid 枚举 surfaces（快路径）
     // ----------------------------------------------------------
@@ -185,7 +246,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
             return r;
         }
     }
-    std::cout << "[resolver] time 3 = " << rpc_unix_epoch_ms() << std::endl;
+
     // ----------------------------------------------------------
     // 路径 3：恢复路径（仅当 allow_pid_rebind 且 launch_pid 存活）
     // ----------------------------------------------------------
@@ -193,7 +254,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         && input.launch_pid != 0
         && !input.target_basename.empty()
         && m_deps.prims.is_running(input.launch_pid)) {
-        std::cout << "[resolver] time 3.1 = " << rpc_unix_epoch_ms() << std::endl;
+
         DWORD new_pid = 0;
         HWND recovered = try_recover_by_exe(input.launch_pid, input.target_basename, new_pid);
 
@@ -217,7 +278,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
     } else {
         r.diag.reason = "no_rebind_allowed";
     }
-    std::cout << "[resolver] time 4 = " << rpc_unix_epoch_ms() << std::endl;
+
     // 用最终确定的 PID 刷新 surfaces
     if (r.capture_pid != 0) {
         r.surfaces = m_deps.wops.enumerate_visible_top_level(r.capture_pid);
@@ -227,7 +288,7 @@ CaptureTargetResult CaptureTargetResolver::resolve( const CaptureTargetInput& in
         r.main_hwnd_owner_pid         = m_deps.wops.pid(r.main_hwnd);
         r.diag.selected_from_surfaces = true;
     }
-    std::cout << "[resolver] time 5 = " << rpc_unix_epoch_ms() << std::endl;
+
     return r;
 }
 

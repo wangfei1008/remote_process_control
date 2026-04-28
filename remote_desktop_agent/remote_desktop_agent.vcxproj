@@ -17,6 +17,10 @@
     <ClCompile Include="bootstrap\runtime_settings.cpp" />
     <ClCompile Include="input\input_controller.cpp" />
     <ClCompile Include="rpc_core\common\character_conversion.cpp" />
+    <ClCompile Include="rpc_core\session\capture_worker.cpp">
+      <ForcedIncludeFiles>rpc_core\session\capture_worker_compat.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\encode_worker.cpp" />
     <ClCompile Include="signaling\signaling_transport.cpp" />
     <ClCompile Include="orchestration\active_desktop_session.cpp" />
     <ClCompile Include="orchestration\desktop_session_factory.cpp" />
@@ -27,6 +31,7 @@
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp" />
     <ClCompile Include="rpc_core\capture\infra\win32_process.cpp" />
     <ClCompile Include="rpc_core\capture\infra\win32_window.cpp" />
+    <ClCompile Include="rpc_core\capture\infra\win32_job.cpp" />
     <ClCompile Include="rpc_core\capture\session\process_session.cpp" />
     <ClCompile Include="rpc_core\capture\policy\window_score_policy.cpp" />
     <ClCompile Include="rpc_core\capture\policy\capture_target_resolver.cpp" />
@@ -41,11 +46,10 @@
     <ClCompile Include="rpc_core\transport\remote_desktop_media_sender.cpp" />
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp" />
     <ClCompile Include="rpc_core\encode\h264_encoder.cpp" />
-    <ClCompile Include="rpc_core\common\window_ops.cpp" />
     <ClCompile Include="rpc_core\encode\h264_avcc_utils.cpp" />
     <ClCompile Include="rpc_core\session\remote_video_engine.cpp" />
     <ClCompile Include="rpc_core\source\silence_opus_generator.cpp" />
-    <ClCompile Include="rpc_core\session\remote_video_engine_workers.cpp" />
+    <!-- EncodeWorker 已抽到 rpc_core/session/encode_worker.cpp -->
     <ClCompile Include="rpc_core\encode\video_encode_pipeline.cpp" />
     <ClCompile Include="rpc_core\transport\remote_file_transfer_controller.cpp" />
     <ClCompile Include="rpc_core\transport\remote_file_store_repository.cpp" />
@@ -56,10 +60,14 @@
     <ClInclude Include="app\runtime_config.h" />
     <ClInclude Include="bootstrap\runtime_settings.h" />
     <ClInclude Include="input\input_controller.h" />
+    <ClInclude Include="rpc_core\capture\infra\win32_job.h" />
     <ClInclude Include="rpc_core\common\character_conversion.h" />
     <ClInclude Include="rpc_core\common\remote_video_contract.h" />
+    <ClInclude Include="rpc_core\session\capture_worker.h" />
+    <ClInclude Include="rpc_core\session\capture_worker_compat.h" />
+    <ClInclude Include="rpc_core\session\encode_worker.h" />
     <ClInclude Include="rpc_core\session\remote_video_engine_impl_types.h" />
-    <ClInclude Include="rpc_core\session\remote_video_engine_workers.h" />
+    <!-- remote_video_engine_workers.h 已无 EncodeWorker 依赖，可保留但不强制 include -->
     <ClInclude Include="signaling\signaling_event.h" />
     <ClInclude Include="signaling\signaling_observer.h" />
     <ClInclude Include="signaling\signaling_transport.h" />
@@ -88,7 +96,6 @@
     <ClInclude Include="rpc_core\capture\pipeline\frame_composer.h" />
     <ClInclude Include="rpc_core\capture\pipeline\capture_pipeline.h" />
     <ClInclude Include="rpc_core\common\rpc_time.h" />
-    <ClInclude Include="rpc_core\common\window_ops.h" />
     <ClInclude Include="rpc_core\encode\encoder_layout_policy.h" />
     <ClInclude Include="rpc_core\encode\h264_avcc_utils.h" />
     <ClInclude Include="rpc_core\encode\h264_encoder.hpp" />

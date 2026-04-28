@@ -90,9 +90,6 @@
     <ClCompile Include="rpc_core\capture\bmp_dump_writer.cpp">
       <Filter>rpc_core\capture</Filter>
     </ClCompile>
-    <ClCompile Include="rpc_core\common\window_ops.cpp">
-      <Filter>rpc_core\common</Filter>
-    </ClCompile>
     <ClCompile Include="rpc_core\encode\encoder_layout_policy.cpp">
       <Filter>rpc_core\encode</Filter>
     </ClCompile>
@@ -171,6 +168,18 @@
     <ClCompile Include="rpc_core\session\remote_video_engine_workers.cpp">
       <Filter>rpc_core\session</Filter>
     </ClCompile>
+    <ClCompile Include="rpc_core\capture\infra\win32_job.cpp">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\capture_worker.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClCompile Include="rpc_core\session\encode_worker.cpp">
+      <Filter>rpc_core\session</Filter>
+    </ClCompile>
+    <ClInclude Include="rpc_core\session\capture_worker_compat.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="app\rpc_remote_application.h">
@@ -213,9 +222,6 @@
       <Filter>rpc_core\capture</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\common\rpc_time.h">
-      <Filter>rpc_core\common</Filter>
-    </ClInclude>
-    <ClInclude Include="rpc_core\common\window_ops.h">
       <Filter>rpc_core\common</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\encode\encoder_layout_policy.h">
@@ -318,6 +324,15 @@
       <Filter>rpc_core\capture\backend</Filter>
     </ClInclude>
     <ClInclude Include="rpc_core\session\remote_video_engine_workers.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\capture\infra\win32_job.h">
+      <Filter>rpc_core\capture\infra</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\capture_worker.h">
+      <Filter>rpc_core\session</Filter>
+    </ClInclude>
+    <ClInclude Include="rpc_core\session\encode_worker.h">
       <Filter>rpc_core\session</Filter>
     </ClInclude>
   </ItemGroup>
