@@ -14,6 +14,8 @@
             signalingBaseUrl: '',
             signalingHost: '127.0.0.1',
             signalingPort: 9090,
+            /** 可选：本机 Receiver 服务健康检查 URL（如 http://127.0.0.1:17890/health），用于任务栏状态指示 */
+            receiverHealthUrl: '',
         };
         if (!overrides || typeof overrides !== 'object') {
             return base;
@@ -29,6 +31,9 @@
             if (!isNaN(p) && p > 0 && p < 65536) {
                 base.signalingPort = p;
             }
+        }
+        if (overrides.receiverHealthUrl != null) {
+            base.receiverHealthUrl = String(overrides.receiverHealthUrl).trim();
         }
         return base;
     }

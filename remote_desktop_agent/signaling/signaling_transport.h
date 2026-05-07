@@ -44,6 +44,7 @@ public:
 private:
     void dispatch_incoming_message(const std::string& json_text);
     signaling_event parse_message(const nlohmann::json& message) const;
+    void try_send_node_register();
 
     runtime_settings m_settings;
     DispatchQueue m_thread_queue;

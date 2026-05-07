@@ -1,0 +1,218 @@
+/* 科技感登录门户 — 与桌面深色主题统一，增强霓虹与网格 */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Share+Tech+Mono&display=swap');
+
+#rpc-auth-root {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background:
+        radial-gradient(ellipse 120% 80% at 50% -20%, rgba(0, 212, 255, 0.18), transparent 55%),
+        radial-gradient(ellipse 80% 60% at 100% 50%, rgba(138, 43, 226, 0.12), transparent 45%),
+        radial-gradient(ellipse 60% 50% at 0% 80%, rgba(0, 255, 200, 0.08), transparent 50%),
+        linear-gradient(165deg, #050810 0%, #0a1628 35%, #061018 100%);
+    overflow: auto;
+}
+
+#rpc-auth-root::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(0, 212, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 212, 255, 0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, black 20%, transparent 75%);
+}
+
+#rpc-auth-root.rpc-auth-root--hidden {
+    display: none !important;
+}
+
+.rpc-auth-panel {
+    position: relative;
+    width: min(440px, 100%);
+    padding: 2px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.55), rgba(138, 43, 226, 0.35), rgba(0, 255, 200, 0.4));
+    box-shadow:
+        0 0 60px rgba(0, 212, 255, 0.15),
+        0 24px 80px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    animation: rpc-auth-glow 8s ease-in-out infinite alternate;
+}
+
+@keyframes rpc-auth-glow {
+    0% {
+        filter: hue-rotate(0deg);
+    }
+    100% {
+        filter: hue-rotate(18deg);
+    }
+}
+
+.rpc-auth-panel-inner {
+    border-radius: 18px;
+    background: rgba(8, 14, 24, 0.92);
+    backdrop-filter: blur(16px);
+    padding: 36px 32px 28px;
+    border: 1px solid rgba(0, 212, 255, 0.12);
+}
+
+.rpc-auth-brand {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.rpc-auth-brand-mark {
+    font-family: 'Orbitron', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.35em;
+    color: rgba(0, 212, 255, 0.85);
+    text-transform: uppercase;
+}
+
+.rpc-auth-brand-title {
+    margin-top: 10px;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 26px;
+    letter-spacing: 0.06em;
+    background: linear-gradient(90deg, #e8f4ff, #7dd3fc 40%, #a78bfa);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.rpc-auth-brand-sub {
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(200, 220, 255, 0.55);
+    letter-spacing: 0.12em;
+}
+
+.rpc-auth-field {
+    margin-bottom: 18px;
+}
+
+.rpc-auth-field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(160, 200, 255, 0.65);
+    margin-bottom: 8px;
+}
+
+.rpc-auth-field input {
+    width: 100%;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 212, 255, 0.22);
+    background: rgba(4, 12, 22, 0.85);
+    color: #e8f0ff;
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.rpc-auth-field input:focus {
+    border-color: rgba(0, 212, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.12);
+}
+
+.rpc-auth-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.rpc-auth-btn-primary {
+    padding: 14px 20px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #041018;
+    background: linear-gradient(100deg, #22d3ee, #06b6d4 45%, #34d399);
+    box-shadow: 0 8px 28px rgba(6, 182, 212, 0.35);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.rpc-auth-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 36px rgba(6, 182, 212, 0.45);
+}
+
+.rpc-auth-btn-primary:active {
+    transform: translateY(0);
+}
+
+.rpc-auth-btn-ghost {
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    background: transparent;
+    color: rgba(200, 215, 240, 0.75);
+    cursor: pointer;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+}
+
+.rpc-auth-btn-ghost:hover {
+    border-color: rgba(0, 212, 255, 0.35);
+    color: #a5f3fc;
+}
+
+.rpc-auth-status {
+    min-height: 22px;
+    margin-top: 14px;
+    font-size: 12px;
+    font-family: 'Share Tech Mono', monospace;
+    color: #fda4af;
+    text-align: center;
+}
+
+.rpc-auth-status.rpc-auth-status--ok {
+    color: #6ee7b7;
+}
+
+.rpc-auth-footer-hint {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(180, 200, 230, 0.45);
+    text-align: center;
+}
+
+/* 任务栏用户徽标（桌面模式） */
+.rpc-auth-user-pill {
+    flex: 0 0 auto;
+    max-width: 200px;
+    padding: 6px 12px;
+    margin-right: 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: rgba(200, 230, 255, 0.95);
+    background: linear-gradient(120deg, rgba(0, 212, 255, 0.15), rgba(139, 92, 246, 0.12));
+    border: 1px solid rgba(0, 212, 255, 0.22);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

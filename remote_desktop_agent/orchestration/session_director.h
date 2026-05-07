@@ -37,7 +37,8 @@ public:
     void stop_all_sessions();
 
 private:
-    void replace_with_new_session(const std::string& client_id, const std::string& exe_path, bool media_enabled);
+    void replace_with_new_session(const std::string& client_id, const std::string& exe_path, bool media_enabled,
+        int operator_disconnect_grace_sec, const std::string& signaling_session_id);
     void teardown_active();
     void on_operator_connection_lost();
     void cancel_pending_disconnect_teardown();
@@ -50,6 +51,7 @@ private:
     desktop_session_factory m_factory;
     std::shared_ptr<active_desktop_session> m_active_session;
     std::string m_current_client_id;
+    int m_operator_disconnect_grace_sec = 60;
 
     std::atomic<uint64_t> m_disconnect_generation{0};
     bool m_disconnect_teardown_pending = false;

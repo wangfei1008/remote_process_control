@@ -17,6 +17,9 @@ runtime_settings runtime_settings::load_from_environment()
     runtime_settings s;
     s.stun_server = runtime_config::get_string("RPC_WEBRTC_STUN_SERVER", "stun.l.google.com:19302");
     s.signaling_local_id = runtime_config::get_string("RPC_SIGNALING_LOCAL_ID", "server");
+    s.node_auth_key = runtime_config::get_string("RPC_NODE_AUTH_KEY", "");
+    s.default_operator_disconnect_grace_sec =
+        (std::max)(1, runtime_config::get_int("RPC_OPERATOR_DISCONNECT_GRACE_SEC", 60));
     s.data_root = runtime_config::get_string("RPC_DATA_ROOT", "D:\\rpc_data");
     s.file_chunk_size = static_cast<std::uint64_t>(
         (std::max)(1, runtime_config::get_int("RPC_FILE_CHUNK_SIZE", static_cast<int>(512 * 1024))));

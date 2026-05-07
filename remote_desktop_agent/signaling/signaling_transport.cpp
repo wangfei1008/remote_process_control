@@ -40,6 +40,7 @@ void signaling_transport::start(const std::string& ip, int port)
 
     m_websocket->onOpen([this] {
         std::cout << "[signaling] websocket opened " << m_signaling_url << std::endl;
+        try_send_node_register();
     });
     m_websocket->onClosed([this]() {
         std::cout << "[signaling] websocket closed " << m_signaling_url << std::endl;
@@ -87,6 +88,26 @@ void signaling_transport::send_json_text(const std::string& json_text)
     if (!m_websocket || !m_websocket->isOpen()) return;
     try {
         m_websocket->send(json_text);
+    } catch (const std::exception& e) {
+        std::cerr << "[signaling] send failed: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[signaling] send failed: unknown" << std::endl;
+    }
+}
+
+void signaling_transport::try_send_node_register()
+{
+    if (m_settings.node_auth_key.empty()) {
+        std::cout << "[signaling] 未设置 RPC_NODE_AUTH_KEY，跳过 node_register（与受管信令库联调时请配置节点密钥）" << std::endl;
+        return;
+    }
+    nlohmann::json out;
+    out["type"] = "node_register";
+    out["data"]["node_name"] = m_settings.signaling_local_id;
+    out["data"]["auth_key"] = m_settings.node_auth_key;
+    try {
+        send_json_text(out.dump());
+        std::cout << "[signaling] 已发送 node_register node_name=" << m_settings.signaling_local_id << std::endl;
     } catch (...) {
     }
 }
@@ -108,8 +129,12 @@ void signaling_transport::dispatch_incoming_message(const std::string& json_text
         nlohmann::json j = nlohmann::json::parse(json_text);
         signaling_event ev = parse_message(j);
         m_observer->on_signaling_event(ev);
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cerr << "[signaling] json parse error: " << e.what() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[signaling] invalid message: " << e.what() << std::endl;
     } catch (...) {
-        std::cerr << "[signaling] invalid json" << std::endl;
+        std::cerr << "[signaling] invalid message" << std::endl;
     }
 }
 
@@ -126,12 +151,29 @@ void signaling_transport::dispatch_incoming_message(const std::string& json_text
 signaling_event signaling_transport::parse_message(const nlohmann::json& message) const
 {
     signaling_event ev;
-    auto it = message.find("id");
-    if (it == message.end() || !it->is_string()) return ev;
-    ev.client_id = it->get<std::string>();
-    it = message.find("type");
-    if (it == message.end() || !it->is_string()) return ev;
-    const std::string type = it->get<std::string>();
+    auto type_it = message.find("type");
+    if (type_it == message.end() || !type_it->is_string())
+        return ev;
+    const std::string type = type_it->get<std::string>();
+
+    // 受管模式：信令服务主动下发（无顶层 id，与《接口》agent_start_session 一致）
+    if (type == "agent_start_session") {
+        ev.type = signaling_event_type::agent_start_session;
+        if (!message.contains("data") || !message["data"].is_object())
+            return ev;
+        const nlohmann::json& d = message["data"];
+        ev.exe_path = d.value("exe_path", std::string());
+        ev.signaling_session_id = d.value("session_id", std::string());
+        ev.grace_period_sec = d.value("grace_period", 0);
+        ev.client_id = d.value("operator_client_id", std::string());
+        return ev;
+    }
+
+    auto id_it = message.find("id");
+    if (id_it == message.end() || !id_it->is_string())
+        return ev;
+    ev.client_id = id_it->get<std::string>();
+
     if (type == "request") {
         ev.type = signaling_event_type::media_session_requested;
         ev.exe_path = message.value("exePath", "");

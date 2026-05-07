@@ -57,6 +57,7 @@ private:
     const runtime_settings* m_settings = nullptr;
     std::string m_client_id;
     std::string m_exe_path;
+    std::string m_signaling_session_id;
     bool m_media_enabled = true;
     std::function<void(std::function<void()>)> m_post_to_signaling;
     std::function<void()> m_on_connection_lost;

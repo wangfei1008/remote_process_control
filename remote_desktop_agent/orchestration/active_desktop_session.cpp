@@ -38,7 +38,11 @@ void active_desktop_session::wire_components(const desktop_session_create_params
     m_settings = params.settings;
     m_client_id = params.client_id;
     m_exe_path = params.exe_path;
+    m_signaling_session_id = params.signaling_session_id;
     m_media_enabled = params.media_enabled;
+    if (!m_signaling_session_id.empty()) {
+        std::cout << "[session] signaling_session_id=" << m_signaling_session_id << std::endl;
+    }
     m_post_to_signaling = params.post_to_signaling_thread;
     m_on_connection_lost = params.on_connection_lost;
 

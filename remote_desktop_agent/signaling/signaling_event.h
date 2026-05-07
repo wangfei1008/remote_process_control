@@ -23,6 +23,8 @@ enum class signaling_event_type {
     file_only_session_requested,
     sdp_answer,
     stop_session,
+    /** 信令服务经库鉴权后下发的受管会话开始（见接口：agent_start_session） */
+    agent_start_session,
 };
 
 struct signaling_event {
@@ -30,4 +32,8 @@ struct signaling_event {
     std::string client_id;
     std::string exe_path;
     std::string sdp_text;
+    /** 服务器生成的会话 id，用于审计与排查 */
+    std::string signaling_session_id;
+    /** agent_start_session.data.grace_period；其它事件为 0 表示使用 runtime 默认 */
+    int grace_period_sec = 0;
 };

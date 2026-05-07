@@ -36,6 +36,10 @@ struct desktop_session_create_params {
     std::function<void(std::function<void()>)> post_to_signaling_thread;
     std::function<void(const std::string&)> send_signaling_json;
     std::function<void()> on_connection_lost;
+    /** 操作端 WebRTC 断线宽限期（秒），来自 agent_start_session 或运行默认 */
+    int operator_disconnect_grace_sec = 60;
+    /** 受管会话 id（仅日志；可为空） */
+    std::string signaling_session_id;
 };
 
 class desktop_session_factory {

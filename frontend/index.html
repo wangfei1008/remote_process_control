@@ -2,8 +2,10 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Remote Process Control</title>
+    <title>工业软件远程工作站</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="auth_portal.css">
+    <link rel="stylesheet" href="admin_console.css">
     <!-- adapter.js 外链在部分网络环境会失败（ERR_EMPTY_RESPONSE），先禁用以避免影响主流程 -->
 </head>
 <body>
@@ -32,9 +34,14 @@
     <!-- 信令配置：signaling_config.js 须先于 rpc_config.js（file:// 禁止读 JSON） -->
     <script src="./signaling_config.js"></script>
     <script src="./rpc_config.js"></script>
+    <script src="./receiver_probe.js"></script>
     <script src="./rpc_random_id.js"></script>
+    <script src="./rpc_md5.js"></script>
+    <script src="./auth_signaling.js"></script>
+    <script src="./auth_portal.js"></script>
     <!-- 桌面：启动进程管理（须先于 desktopMode） -->
     <script src="./desktop_process_manager.js" defer></script>
+    <script src="./admin_console.js" defer></script>
     <!-- Desktop Container：使用普通 script，支持 file:// -->
     <script src="./desktopMode.js" defer></script>
     <!-- UI / WebRTC / 信令（须在 client 之前加载完毕，由 DOMContentLoaded 后启动） -->

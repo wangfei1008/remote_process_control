@@ -1,6 +1,7 @@
 #include "orchestration/session_director.h"
 #include "orchestration/active_desktop_session.h"
 
+#include <algorithm>
 #include <iostream>
 #include <thread>
 
@@ -56,10 +57,12 @@ void session_director::on_signaling_event(const signaling_event& event)
         switch (event.type) {
         case signaling_event_type::invalid:
             break;
-        case signaling_event_type::media_session_requested:
+        case signaling_event_type::media_session_requested: {
+            const int grace_sec = (std::max)(1, m_settings.default_operator_disconnect_grace_sec);
             if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
             if (m_active_session && !m_current_client_id.empty() && event.client_id == m_current_client_id && m_active_session->exe_path() == event.exe_path) {
                 cancel_pending_disconnect_teardown();
+                m_operator_disconnect_grace_sec = grace_sec;
                 desktop_session_create_params params;
                 params.settings = &m_settings;
                 params.rtc_config = m_rtc_config;
@@ -67,6 +70,8 @@ void session_director::on_signaling_event(const signaling_event& event)
                 params.client_id = event.client_id;
                 params.exe_path = event.exe_path;
                 params.media_enabled = true;
+                params.operator_disconnect_grace_sec = grace_sec;
+                params.signaling_session_id.clear();
                 params.io_dispatch = &m_task_queue;
                 params.post_to_signaling_thread = [this](std::function<void()> fn) { m_task_queue.dispatch(std::move(fn)); };
                 params.send_signaling_json = [this](const std::string& json) { m_transport.send_json_text(json); };
@@ -74,12 +79,44 @@ void session_director::on_signaling_event(const signaling_event& event)
                 std::cout << "[session_director] reconnect session client_id=" << event.client_id << std::endl;
                 m_active_session->reconnect_operator(params);
             } else {
-                replace_with_new_session(event.client_id, event.exe_path, true);
+                replace_with_new_session(event.client_id, event.exe_path, true, grace_sec, std::string());
             }
-            break;
+        } break;
+        case signaling_event_type::agent_start_session: {
+            if (event.client_id.empty()) {
+                std::cerr << "[session_director] agent_start_session 缺少 operator_client_id，已忽略" << std::endl;
+                break;
+            }
+            const int grace_sec = (std::max)(1, event.grace_period_sec > 0 ? event.grace_period_sec
+                                                                         : m_settings.default_operator_disconnect_grace_sec);
+            if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
+            if (m_active_session && !m_current_client_id.empty() && event.client_id == m_current_client_id && m_active_session->exe_path() == event.exe_path) {
+                cancel_pending_disconnect_teardown();
+                m_operator_disconnect_grace_sec = grace_sec;
+                desktop_session_create_params params;
+                params.settings = &m_settings;
+                params.rtc_config = m_rtc_config;
+                params.websocket = m_transport.websocket_weak();
+                params.client_id = event.client_id;
+                params.exe_path = event.exe_path;
+                params.media_enabled = true;
+                params.operator_disconnect_grace_sec = grace_sec;
+                params.signaling_session_id = event.signaling_session_id;
+                params.io_dispatch = &m_task_queue;
+                params.post_to_signaling_thread = [this](std::function<void()> fn) { m_task_queue.dispatch(std::move(fn)); };
+                params.send_signaling_json = [this](const std::string& json) { m_transport.send_json_text(json); };
+                params.on_connection_lost = [this]() { on_operator_connection_lost(); };
+                std::cout << "[session_director] reconnect (agent_start_session) client_id=" << event.client_id
+                          << " session_id=" << event.signaling_session_id << std::endl;
+                m_active_session->reconnect_operator(params);
+            } else {
+                replace_with_new_session(event.client_id, event.exe_path, true, grace_sec, event.signaling_session_id);
+            }
+        } break;
         case signaling_event_type::file_only_session_requested:
             if (m_replace_policy && !m_replace_policy->should_replace_existing_session_on_new_media_request()) return;
-            replace_with_new_session(event.client_id, std::string(), false);
+            replace_with_new_session(event.client_id, std::string(), false,
+                (std::max)(1, m_settings.default_operator_disconnect_grace_sec), std::string());
             break;
         case signaling_event_type::sdp_answer:
             if (!m_active_session || event.client_id != m_current_client_id) return;
@@ -104,11 +141,13 @@ void session_director::on_signaling_event(const signaling_event& event)
 ///
 /// @时间    2026/4/3
 /////////////////////////////////////////////////////////////////////////////
-void session_director::replace_with_new_session(const std::string& client_id, const std::string& exe_path, bool media_enabled)
+void session_director::replace_with_new_session(const std::string& client_id, const std::string& exe_path, bool media_enabled,
+    int operator_disconnect_grace_sec, const std::string& signaling_session_id)
 {
     teardown_active();
     m_current_client_id = client_id;
     cancel_pending_disconnect_teardown();
+    m_operator_disconnect_grace_sec = (std::max)(1, operator_disconnect_grace_sec);
 
     desktop_session_create_params params;
     params.settings = &m_settings;
@@ -117,13 +156,16 @@ void session_director::replace_with_new_session(const std::string& client_id, co
     params.client_id = client_id;
     params.exe_path = exe_path;
     params.media_enabled = media_enabled;
+    params.operator_disconnect_grace_sec = m_operator_disconnect_grace_sec;
+    params.signaling_session_id = signaling_session_id;
     params.io_dispatch = &m_task_queue;
     params.post_to_signaling_thread = [this](std::function<void()> fn) { m_task_queue.dispatch(std::move(fn)); };
     params.send_signaling_json = [this](const std::string& json) { m_transport.send_json_text(json); };
     params.on_connection_lost = [this]() { on_operator_connection_lost(); };
 
     m_active_session = m_factory.create_session(params);
-    std::cout << "[session_director] new session client_id=" << client_id << " media=" << media_enabled << std::endl;
+    std::cout << "[session_director] new session client_id=" << client_id << " media=" << media_enabled
+              << " grace_s=" << m_operator_disconnect_grace_sec << std::endl;
 }
 
 void session_director::cancel_pending_disconnect_teardown()
@@ -167,10 +209,11 @@ void session_director::on_operator_connection_lost()
         if (m_current_client_id.empty() || !m_active_session) return;
         m_disconnect_teardown_pending = true;
         m_active_session->begin_disconnect_grace();
+        const int grace_s = (std::max)(1, m_operator_disconnect_grace_sec);
         std::cout << "[session_director] operator connection lost client_id=" << m_current_client_id
-                  << " pending_teardown_s=60" << std::endl;
-        std::thread([this, gen]() {
-            std::this_thread::sleep_for(std::chrono::seconds(60));
+                  << " pending_teardown_s=" << grace_s << std::endl;
+        std::thread([this, gen, grace_s]() {
+            std::this_thread::sleep_for(std::chrono::seconds(grace_s));
             m_task_queue.dispatch([this, gen]() {
                 if (gen != m_disconnect_generation.load()) return;
                 if (!m_disconnect_teardown_pending) return;

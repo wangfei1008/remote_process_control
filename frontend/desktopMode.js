@@ -50,12 +50,18 @@
 
         // 经典页面已移除，无需再隐藏 .container
 
+        /** @type {HTMLButtonElement|null} */
+        let btnAdmin = null;
+
         // Background root.
         const desktopRoot = doc.createElement('div');
         desktopRoot.id = 'desktop-root';
         desktopRoot.style.position = 'fixed';
         desktopRoot.style.inset = '0';
-        desktopRoot.style.background = 'linear-gradient(135deg, #0b1220 0%, #101a2c 50%, #0b1220 100%)';
+        desktopRoot.style.background =
+            'radial-gradient(ellipse 80% 60% at 20% 10%, rgba(0, 180, 255, 0.12), transparent 55%), '
+            + 'radial-gradient(ellipse 60% 50% at 90% 80%, rgba(120, 80, 255, 0.08), transparent 50%), '
+            + 'linear-gradient(145deg, #060b14 0%, #0d1628 42%, #081018 100%)';
         desktopRoot.style.overflow = 'hidden';
         desktopRoot.style.userSelect = 'none';
 
@@ -99,6 +105,7 @@
 
         const startBtn = doc.createElement('button');
         startBtn.textContent = '开始';
+        startBtn.title = '工业软件远程工作站';
         startBtn.style.height = '34px';
         startBtn.style.padding = '0 12px';
         startBtn.style.borderRadius = '8px';
@@ -137,20 +144,79 @@
         taskbar.appendChild(startBtn);
         taskbar.appendChild(appsStrip);
 
+        const taskbarRight = doc.createElement('div');
+        taskbarRight.style.display = 'flex';
+        taskbarRight.style.alignItems = 'center';
+        taskbarRight.style.gap = '10px';
+        taskbarRight.style.flex = '0 0 auto';
+        taskbarRight.style.marginLeft = 'auto';
+
+        const receiverBadge = doc.createElement('div');
+        receiverBadge.className = 'rpc-receiver-badge';
+        receiverBadge.textContent = 'Receiver';
+        receiverBadge.style.display = 'none';
+        receiverBadge.style.fontSize = '11px';
+        receiverBadge.style.fontWeight = '700';
+        receiverBadge.style.padding = '4px 10px';
+        receiverBadge.style.borderRadius = '999px';
+        receiverBadge.style.border = '1px solid rgba(0, 255, 200, 0.35)';
+        receiverBadge.style.background = 'rgba(0, 70, 55, 0.5)';
+        receiverBadge.style.color = '#b8ffe8';
+        receiverBadge.style.letterSpacing = '0.04em';
+        receiverBadge.title = '本机低延时 Receiver 服务探测（见 signaling 配置 receiverHealthUrl）';
+
+        const userPill = doc.createElement('div');
+        userPill.className = 'rpc-auth-user-pill';
+        userPill.style.display = 'none';
+        userPill.title = '当前会话';
+
         const clockEl = doc.createElement('div');
         clockEl.style.flex = '0 0 auto';
         clockEl.style.color = 'rgba(231,238,252,0.95)';
         clockEl.style.fontWeight = '700';
         clockEl.style.fontSize = '12px';
         clockEl.style.letterSpacing = '0.3px';
-        clockEl.style.marginLeft = 'auto';
-        taskbar.appendChild(clockEl);
+        taskbarRight.appendChild(receiverBadge);
+        taskbarRight.appendChild(userPill);
+        taskbarRight.appendChild(clockEl);
+        taskbar.appendChild(taskbarRight);
+
+        function refreshAuthUserPill() {
+            const name = String(window.__rpcAuthUsername || '').trim();
+            const role = String(window.__rpcAuthRole || '').trim();
+            if (!name) {
+                userPill.style.display = 'none';
+                return;
+            }
+            userPill.style.display = 'block';
+            userPill.textContent = role ? name + ' · ' + role : name;
+        }
+        refreshAuthUserPill();
+
+        window.addEventListener('rpc-receiver-probe', function (ev) {
+            try {
+                const d = ev.detail || {};
+                if (!d.configured) {
+                    receiverBadge.style.display = 'none';
+                    return;
+                }
+                receiverBadge.style.display = d.online ? 'block' : 'none';
+                receiverBadge.style.opacity = d.online ? '1' : '0.45';
+                receiverBadge.style.borderColor = d.online ? 'rgba(0,255,200,0.45)' : 'rgba(255,160,80,0.45)';
+                receiverBadge.style.background = d.online ? 'rgba(0, 70, 55, 0.5)' : 'rgba(70, 40, 0, 0.45)';
+                receiverBadge.style.color = d.online ? '#b8ffe8' : '#ffd8b8';
+            } catch (_) {}
+        });
 
         desktopRoot.appendChild(windowLayer);
         desktopRoot.appendChild(desktopIconsLayer);
         desktopRoot.appendChild(taskbar);
         desktopRoot.appendChild(startMenu);
         doc.body.appendChild(desktopRoot);
+
+        if (typeof window.__rpcProbeReceiverService === 'function') {
+            window.__rpcProbeReceiverService();
+        }
 
         function updateClock() {
             try {
@@ -178,10 +244,8 @@
             toggleStartMenu(true);
         });
 
-        function getUserAppEntries() {
-            const mgr = window.__rpcDesktopProcessManager;
-            if (mgr && typeof mgr.loadEntries === 'function') return mgr.loadEntries();
-            return [];
+        function isAdminRole() {
+            return String(window.__rpcAuthRole || '').toLowerCase() === 'admin';
         }
 
         function makeMyDataApp() {
@@ -199,28 +263,37 @@
             };
         }
 
-        function entryToLaunchApp(entry) {
-            return {
-                id: entry.id,
-                name: entry.name,
-                icon: entry.icon || '⬚',
-                workPath: entry.workPath,
-                workNode: entry.workNode,
-                exePath: entry.workPath,
-            };
+        /** 信令服务器授权的远程应用（仅展示 get_auth_apps / auth_apps_res，不使用本地登记的缓存条目） */
+        function mergeRemoteCatalog() {
+            const c = window.__rpcAuthCatalog;
+            if (!c || !Array.isArray(c.apps)) return [];
+            const icons = c.iconsByAppId || {};
+            return c.apps
+                .map(function (a) {
+                    const aid = a.app_id != null ? String(a.app_id) : '';
+                    const ic = icons[aid];
+                    return {
+                        kind: 'rpc_remote',
+                        id: 'srvapp_' + aid,
+                        name: String(a.display_name || 'Remote App'),
+                        icon: ic || '🖥',
+                        exePath: String(a.exe_path || '').trim(),
+                        workNode: String(a.node_name || '').trim(),
+                        exe_path: a.exe_path,
+                    };
+                })
+                .filter(function (x) {
+                    return x.exePath.length > 0 && x.workNode.length > 0;
+                });
         }
 
-        /** 完整列表：我的数据 + 用户进程 */
+        /** 完整列表：我的数据 + 信令 get_auth_apps 授权应用（无 localStorage 自定义项） */
         function buildAppDefs() {
-            const userPart = getUserAppEntries().map(entryToLaunchApp).filter(function (a) {
-                return String(a.exePath || '').trim().length > 0;
-            });
-            return [makeMyDataApp()].concat(userPart);
+            const remotePart = mergeRemoteCatalog();
+            return [makeMyDataApp()].concat(remotePart);
         }
 
         let appDefs = buildAppDefs();
-
-        let dpmPanelApi = null;
 
         function applyIconToElement(box, iconValue) {
             box.innerHTML = '';
@@ -327,7 +400,7 @@
         }
 
         const menuSectionTitle = doc.createElement('div');
-        menuSectionTitle.textContent = '应用程序';
+        menuSectionTitle.textContent = '应用与授权资源';
         menuSectionTitle.style.color = 'rgba(231,238,252,0.85)';
         menuSectionTitle.style.fontSize = '11px';
         menuSectionTitle.style.fontWeight = '700';
@@ -391,17 +464,43 @@
             });
         }
 
-        function refreshAppViews() {
-            appDefs = buildAppDefs();
-            renderDesktopIcons();
-            renderStartMenuApps();
-            if (dpmPanelApi && typeof dpmPanelApi.refreshList === 'function') {
-                dpmPanelApi.refreshList();
-            }
+        function applyRoleUi() {
+            try {
+                if (btnAdmin) {
+                    btnAdmin.style.display = isAdminRole() ? 'inline-block' : 'none';
+                }
+            } catch (_) {}
         }
 
-        renderDesktopIcons();
-        renderStartMenuApps();
+        function refreshAppViews() {
+            appDefs = buildAppDefs();
+            refreshAuthUserPill();
+            applyRoleUi();
+            renderDesktopIcons();
+            renderStartMenuApps();
+        }
+
+        /** 先请求信令 get_auth_apps（+图标），再刷新桌面；失败则仍用内存中的 __rpcAuthCatalog */
+        function refreshCatalogFromServerThenViews() {
+            const cat = window.__rpcAuthCatalog;
+            const tok = cat && cat.token ? String(cat.token) : '';
+            const api = window.__rpcAuthSignaling;
+            if (!tok || !api || typeof api.fetchCatalogWithToken !== 'function') {
+                refreshAppViews();
+                return;
+            }
+            api.fetchCatalogWithToken(tok).then(function (fresh) {
+                window.__rpcAuthCatalog = window.__rpcAuthCatalog || {};
+                window.__rpcAuthCatalog.apps = fresh.apps || [];
+                window.__rpcAuthCatalog.iconsByAppId = fresh.iconsByAppId || {};
+                window.__rpcAuthCatalog.token = tok;
+                refreshAppViews();
+            }).catch(function () {
+                refreshAppViews();
+            });
+        }
+
+        refreshCatalogFromServerThenViews();
 
         const menuFooter = doc.createElement('div');
         menuFooter.style.marginTop = '14px';
@@ -411,18 +510,19 @@
         menuFooter.style.gap = '10px';
         menuFooter.style.flexWrap = 'wrap';
 
-        const btnSettings = doc.createElement('button');
-        btnSettings.type = 'button';
-        btnSettings.textContent = '系统设置';
-        btnSettings.style.flex = '1 1 140px';
-        btnSettings.style.minHeight = '36px';
-        btnSettings.style.borderRadius = '10px';
-        btnSettings.style.border = '1px solid rgba(255,255,255,0.10)';
-        btnSettings.style.background = '#1a2233';
-        btnSettings.style.color = '#e7eefc';
-        btnSettings.style.cursor = 'pointer';
-        btnSettings.style.fontWeight = '600';
-        btnSettings.style.fontSize = '12px';
+        btnAdmin = doc.createElement('button');
+        btnAdmin.type = 'button';
+        btnAdmin.textContent = '管控台';
+        btnAdmin.style.flex = '1 1 140px';
+        btnAdmin.style.minHeight = '36px';
+        btnAdmin.style.borderRadius = '10px';
+        btnAdmin.style.border = '1px solid rgba(0, 200, 255, 0.32)';
+        btnAdmin.style.background = 'linear-gradient(180deg, rgba(0,55,75,0.95), rgba(0,35,55,0.98))';
+        btnAdmin.style.color = '#c8f4ff';
+        btnAdmin.style.cursor = 'pointer';
+        btnAdmin.style.fontWeight = '600';
+        btnAdmin.style.fontSize = '12px';
+        btnAdmin.style.display = 'none';
 
         const btnLogout = doc.createElement('button');
         btnLogout.type = 'button';
@@ -437,30 +537,19 @@
         btnLogout.style.fontWeight = '600';
         btnLogout.style.fontSize = '12px';
 
-        menuFooter.appendChild(btnSettings);
+        menuFooter.appendChild(btnAdmin);
         menuFooter.appendChild(btnLogout);
         startMenu.appendChild(menuFooter);
 
-        if (window.__rpcDesktopProcessManager && typeof window.__rpcDesktopProcessManager.mountPanel === 'function') {
-            dpmPanelApi = window.__rpcDesktopProcessManager.mountPanel({
-                doc: doc,
-                desktopRoot: desktopRoot,
-            });
-        }
+        applyRoleUi();
 
-        if (window.__rpcDesktopAppStore && typeof window.__rpcDesktopAppStore.subscribe === 'function') {
-            window.__rpcDesktopAppStore.subscribe(function () {
-                refreshAppViews();
-            });
-        }
-
-        btnSettings.addEventListener('click', function (e) {
+        btnAdmin.addEventListener('click', function (e) {
             e.stopPropagation();
             toggleStartMenu(true);
-            if (dpmPanelApi && typeof dpmPanelApi.open === 'function') {
-                dpmPanelApi.open();
+            if (typeof window.__rpcOpenAdminConsole === 'function') {
+                window.__rpcOpenAdminConsole(doc);
             } else {
-                console.warn('[rpc-desktop] 进程管理面板未加载');
+                console.warn('[rpc-desktop] admin_console 未加载');
             }
         });
 
@@ -503,12 +592,22 @@
             e.stopPropagation();
             closeAllDesktopWindows();
             toggleStartMenu(true);
+            try {
+                if (typeof window.__rpcAuthClearSession === 'function') {
+                    window.__rpcAuthClearSession();
+                }
+            } catch (_) {}
+            try {
+                window.location.reload();
+            } catch (_) {}
         });
 
         window.__rpcDesktop = {
             closeAll: closeAllDesktopWindows,
             getWindowCount: function () { return windows.size; },
         };
+
+        window.__rpcDesktopRefreshApps = refreshCatalogFromServerThenViews;
 
         function tryLaunchAppFromShortcut(app) {
             if (!app) return;

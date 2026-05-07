@@ -1,5 +1,5 @@
 {
   "signalingBaseUrl": "",
-  "signalingHost": "192.168.3.15",
+  "signalingHost": "127.0.0.1",
   "signalingPort": 9090
 }

@@ -691,7 +691,13 @@
                 window.__rpcApp = app;
                 app.run();
             } else {
-                startDesktopMode();
+                if (typeof window.__rpcMountAuthPortal === 'function') {
+                    window.__rpcMountAuthPortal(document, function () {
+                        startDesktopMode();
+                    });
+                } else {
+                    startDesktopMode();
+                }
             }
         } catch (err) {
             console.error('[RemoteProcessControl] 启动失败:', err);

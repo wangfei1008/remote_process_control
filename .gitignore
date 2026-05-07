@@ -8,3 +8,10 @@
 /remote_desktop_agent/remote_d.B8C4D2E1
 /remote_desktop_receiver/remote_d.833B1D7C
 /remote_desktop_agent/rpc_core/capture0
+/signaling_server/tmp
+/signaling_server/tests/release
+/docs/_plan_extract
+/signaling_server/tests
+/signaling_server/release
+/docs/tmp_doc_extract/out
+/docs/tmp_doc_extract
